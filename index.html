@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ESP Image Display Control</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    .header {
+      text-align: center;
+      color: white;
+      margin-bottom: 30px;
+    }
+
+    .header h1 {
+      font-size: 2.5em;
+      margin-bottom: 10px;
+    }
+
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 25px;
+      margin-bottom: 20px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+    }
+
+    .card h2 {
+      color: #333;
+      margin-bottom: 15px;
+      font-size: 1.3em;
+      border-bottom: 3px solid #667eea;
+      padding-bottom: 10px;
+    }
+
+    .status {
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 15px;
+      font-weight: 500;
+    }
+
+    .status.connected {
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+
+    .status.disconnected {
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+
+    .form-group {
+      margin-bottom: 15px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+      color: #333;
+      font-weight: 500;
+    }
+
+    select, input[type="text"], input[type="number"], input[type="file"] {
+      width: 100%;
+      padding: 10px 12px;
+      border: 2px solid #ddd;
+      border-radius: 6px;
+      font-size: 1em;
+      transition: border-color 0.3s;
+    }
+
+    select:focus, input:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    .button-group {
+      display: flex;
+      gap: 10px;
+      margin-top: 15px;
+      flex-wrap: wrap;
+    }
+
+    button {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 6px;
+      font-size: 1em;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+
+    .btn-primary {
+      background: #667eea;
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: #5568d3;
+      transform: translateY(-2px);
+      box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+    }
+
+    .btn-primary:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .btn-success {
+      background: #28a745;
+      color: white;
+    }
+
+    .btn-success:hover {
+      background: #218838;
+    }
+
+    .btn-danger {
+      background: #dc3545;
+      color: white;
+    }
+
+    .btn-danger:hover {
+      background: #c82333;
+    }
+
+    .preview {
+      width: 100%;
+      max-width: 400px;
+      margin-top: 15px;
+      border-radius: 8px;
+      border: 2px solid #ddd;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    @media (max-width: 600px) {
+      .grid-2 {
+        grid-template-columns: 1fr;
+      }
+      .header h1 {
+        font-size: 1.8em;
+      }
+    }
+
+    .log {
+      background: #f5f5f5;
+      padding: 15px;
+      border-radius: 6px;
+      max-height: 200px;
+      overflow-y: auto;
+      font-family: 'Courier New', monospace;
+      font-size: 0.9em;
+      color: #333;
+    }
+
+    .log-entry {
+      margin-bottom: 5px;
+      padding: 5px;
+      border-left: 3px solid #667eea;
+      padding-left: 10px;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border: 2px solid #f3f3f3;
+      border-top: 2px solid #667eea;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin-right: 8px;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🎨 ESP Display Control</h1>
+      <p>Send images & GIFs to your LED matrix display</p>
+    </div>
+
+    <!-- Connection Card -->
+    <div class="card">
+      <h2>📡 Connection</h2>
+      <div id="status" class="status disconnected">
+        <span id="status-text">Not Connected</span>
+      </div>
+
+      <div class="grid-2">
+        <div class="form-group">
+          <label for="port-select">Serial Port:</label>
+          <select id="port-select">
+            <option value="">Loading ports...</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="baud-rate">Baud Rate:</label>
+          <input type="number" id="baud-rate" value="115200">
+        </div>
+      </div>
+
+      <div class="button-group">
+        <button class="btn-primary" id="connect-btn">Connect</button>
+        <button class="btn-danger" id="disconnect-btn" disabled>Disconnect</button>
+        <button class="btn-primary" id="refresh-ports-btn">Refresh Ports</button>
+      </div>
+    </div>
+
+    <!-- Settings Card -->
+    <div class="card">
+      <h2>⚙️ Display Settings</h2>
+      <div class="grid-2">
+        <div class="form-group">
+          <label for="width">Width (pixels):</label>
+          <input type="number" id="width" value="32" min="1">
+        </div>
+        <div class="form-group">
+          <label for="height">Height (pixels):</label>
+          <input type="number" id="height" value="8" min="1">
+        </div>
+        <div class="form-group">
+          <label for="brightness">Brightness (0-255):</label>
+          <input type="number" id="brightness" value="255" min="0" max="255">
+        </div>
+        <div class="form-group">
+          <label for="gif-delay">GIF Frame Delay (ms):</label>
+          <input type="number" id="gif-delay" value="100" min="10">
+        </div>
+      </div>
+      <button class="btn-success" id="update-config-btn">Apply Settings</button>
+    </div>
+
+    <!-- Image Upload Card -->
+    <div class="card">
+      <h2>🖼️ Display Image</h2>
+      <div class="form-group">
+        <label for="image-input">Select Image:</label>
+        <input type="file" id="image-input" accept="image/png,image/jpeg,image/gif">
+      </div>
+      <img id="image-preview" class="preview" style="display: none;">
+      <div class="button-group">
+        <button class="btn-primary" id="display-image-btn" disabled>Display Image</button>
+        <button class="btn-primary" id="display-gif-btn" disabled>Display GIF Animation</button>
+      </div>
+    </div>
+
+    <!-- Log Card -->
+    <div class="card">
+      <h2>📋 Activity Log</h2>
+      <div class="log" id="log"></div>
+      <button class="btn-primary" style="margin-top: 10px;" id="clear-log-btn">Clear Log</button>
+    </div>
+  </div>
+
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+  <script>
+    const socket = io();
+    let isConnected = false;
+    let selectedFile = null;
+
+    // DOM Elements
+    const portSelect = document.getElementById('port-select');
+    const connectBtn = document.getElementById('connect-btn');
+    const disconnectBtn = document.getElementById('disconnect-btn');
+    const refreshPortsBtn = document.getElementById('refresh-ports-btn');
+    const statusDiv = document.getElementById('status');
+    const statusText = document.getElementById('status-text');
+    const imageInput = document.getElementById('image-input');
+    const imagePreview = document.getElementById('image-preview');
+    const displayImageBtn = document.getElementById('display-image-btn');
+    const displayGifBtn = document.getElementById('display-gif-btn');
+    const updateConfigBtn = document.getElementById('update-config-btn');
+    const logDiv = document.getElementById('log');
+    const clearLogBtn = document.getElementById('clear-log-btn');
+
+    // Load ports on startup
+    function loadPorts() {
+      fetch('/api/ports')
+        .then(res => res.json())
+        .then(ports => {
+          portSelect.innerHTML = '';
+          ports.forEach(port => {
+            const option = document.createElement('option');
+            option.value = port.path;
+            option.textContent = `${port.path} (${port.manufacturer || 'Unknown'})`;
+            portSelect.appendChild(option);
+          });
+        })
+        .catch(err => log('Error loading ports: ' + err.message));
+    }
+
+    function log(message) {
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      logDiv.appendChild(entry);
+      logDiv.scrollTop = logDiv.scrollHeight;
+    }
+
+    // Connection handlers
+    connectBtn.addEventListener('click', async () => {
+      const portPath = portSelect.value;
+      const baudRate = parseInt(document.getElementById('baud-rate').value);
+
+      if (!portPath) {
+        log('Please select a port');
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/connect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ portPath, baudRate })
+        });
+
+        const data = await res.json();
+        if (res.ok) {
+          isConnected = true;
+          updateConnectionUI();
+          log(`Connected to ${portPath}`);
+        } else {
+          log('Connection failed: ' + data.error);
+        }
+      } catch (err) {
+        log('Connection error: ' + err.message);
+      }
+    });
+
+    disconnectBtn.addEventListener('click', async () => {
+      try {
+        await fetch('/api/disconnect', { method: 'POST' });
+        isConnected = false;
+        updateConnectionUI();
+        log('Disconnected');
+      } catch (err) {
+        log('Disconnect error: ' + err.message);
+      }
+    });
+
+    refreshPortsBtn.addEventListener('click', loadPorts);
+
+    // Image handling
+    imageInput.addEventListener('change', (e) => {
+      selectedFile = e.target.files[0];
+      if (selectedFile) {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          imagePreview.src = event.target.result;
+          imagePreview.style.display = 'block';
+          displayImageBtn.disabled = false;
+          displayGifBtn.disabled = !selectedFile.type.includes('gif');
+        };
+        reader.readAsDataURL(selectedFile);
+      }
+    });
+
+    displayImageBtn.addEventListener('click', async () => {
+      if (!isConnected) {
+        log('Not connected to ESP');
+        return;
+      }
+
+      if (!selectedFile) {
+        log('No image selected');
+        return;
+      }
+
+      try {
+        displayImageBtn.disabled = true;
+        log('Processing image...');
+
+        // For simplicity, using file path. In production, you'd upload file content
+        const res = await fetch('/api/display-image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ imagePath: selectedFile.name })
+        });
+
+        const data = await res.json();
+        if (res.ok) {
+          log('✓ Image sent to ESP!');
+        } else {
+          log('Error: ' + data.error);
+        }
+      } catch (err) {
+        log('Error displaying image: ' + err.message);
+      } finally {
+        displayImageBtn.disabled = !selectedFile;
+      }
+    });
+
+    displayGifBtn.addEventListener('click', async () => {
+      if (!isConnected) {
+        log('Not connected to ESP');
+        return;
+      }
+
+      if (!selectedFile) {
+        log('No GIF selected');
+        return;
+      }
+
+      try {
+        displayGifBtn.disabled = true;
+        log('Processing GIF...');
+
+        const res = await fetch('/api/display-gif', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            gifPath: selectedFile.name,
+            delayMs: parseInt(document.getElementById('gif-delay').value)
+          })
+        });
+
+        const data = await res.json();
+        if (res.ok) {
+          log(`✓ GIF animation sent (${data.frameCount} frames)`);
+        } else {
+          log('Error: ' + data.error);
+        }
+      } catch (err) {
+        log('Error displaying GIF: ' + err.message);
+      } finally {
+        displayGifBtn.disabled = !selectedFile;
+      }
+    });
+
+    updateConfigBtn.addEventListener('click', async () => {
+      try {
+        const config = {
+          width: parseInt(document.getElementById('width').value),
+          height: parseInt(document.getElementById('height').value),
+          brightness: parseInt(document.getElementById('brightness').value)
+        };
+
+        const res = await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(config)
+        });
+
+        if (res.ok) {
+          log('✓ Settings updated');
+        }
+      } catch (err) {
+        log('Error updating config: ' + err.message);
+      }
+    });
+
+    clearLogBtn.addEventListener('click', () => {
+      logDiv.innerHTML = '';
+    });
+
+    function updateConnectionUI() {
+      if (isConnected) {
+        statusDiv.className = 'status connected';
+        statusText.textContent = '✓ Connected';
+        connectBtn.disabled = true;
+        disconnectBtn.disabled = false;
+      } else {
+        statusDiv.className = 'status disconnected';
+        statusText.textContent = '✗ Not Connected';
+        connectBtn.disabled = false;
+        disconnectBtn.disabled = true;
+      }
+    }
+
+    // Socket events
+    socket.on('esp_response', (data) => {
+      log('ESP: ' + data.data);
+    });
+
+    socket.on('connection_error', (data) => {
+      log('Connection Error: ' + data.error);
+      isConnected = false;
+      updateConnectionUI();
+    });
+
+    // Initialize
+    loadPorts();
+    updateConnectionUI();
+  </script>
+</body>
+</html>
