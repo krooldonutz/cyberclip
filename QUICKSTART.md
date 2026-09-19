@@ -1,179 +1,68 @@
-# Quick Start Guide - 5 Minute Setup
+# Cyberclip quick start
 
-## Option A: Python CLI (Fastest ⚡)
+## 1. Install the CH340 driver
 
-Perfect if you just want to send images quickly from command line.
+Connect the ideaspark ESP32 board over USB Type-C. If it does not appear as a serial/COM device, install the CH340 driver for your operating system and reconnect it.
 
-### 1. Install Python Dependencies
-```bash
-pip install pyserial pillow imageio
+Use a data-capable cable. A charge-only cable will power the display but cannot flash firmware or carry images.
+
+## 2. Flash the firmware
+
+Install PlatformIO, open the repository, and run:
+
+```powershell
+pio run -d firmware
+pio run -d firmware -t upload
 ```
 
-### 2. Upload Arduino Code
-- Open Arduino IDE
-- File → New → Copy code from `arduino_sketch/matrix_display.ino`
-- Install `Adafruit NeoPixel` library
-- Select your ESP32/ESP8266 board
-- Upload
+The firmware targets an ESP32 Dev Module, uses the integrated ST7789 at 170×320, and communicates at 921600 baud. PlatformIO downloads the pinned display and JPEG libraries automatically.
 
-### 3. Send Images!
-```bash
-# List ports to find your ESP
-python esp_control.py --list-ports
+If uploading at 921600 is unreliable on your computer, lower only `upload_speed` in `firmware/platformio.ini`. Do not change `monitor_speed` or the firmware/browser transport rate.
 
-# Display image (replace COM3 with your port)
-python esp_control.py -p COM3 -i myimage.jpg
+## 3. Start the web app locally
 
-# Display GIF animation
-python esp_control.py -p COM3 -g animation.gif --delay 100
+Install Node.js 18 or newer, then run:
 
-# Auto-detect ESP and send image
-python esp_control.py -i myimage.jpg
-```
-
-**Done!** Your image should appear on the matrix.
-
----
-
-## Option B: Web Dashboard (Best UX 🌐)
-
-Interactive web interface with real-time preview.
-
-### 1. Setup Same Arduino Code
-(Same as Option A step 2)
-
-### 2. Install Node.js
-- Download from https://nodejs.org/
-- Choose LTS version
-- Install with default settings
-
-### 3. Run the Server
-```bash
-# Navigate to this folder
-cd esp_image_display
-
-# Install Node packages
+```powershell
 npm install
-
-# Start server
-npm start
+npm run dev
 ```
 
-### 4. Open Web Interface
-- Open browser: http://localhost:3000
-- Select COM port → Click Connect
-- Upload image/GIF → Click Display
-- Done!
+Open the localhost URL printed by Vite in desktop Chrome or Edge.
 
----
+## 4. Connect and display media
 
-## Option C: Bluetooth (Wireless 📱)
+1. Select **Connect**.
+2. Choose the CH340 USB serial device.
+3. Wait for the app to show the firmware version and 170×320 display.
+4. Choose a JPEG, PNG, WebP, or GIF up to 20 MB.
+5. Select fit, rotation, background, JPEG quality, and backlight.
+6. Select **Display image** or **Play GIF**.
 
-**Note:** Only works with ESP32 (not ESP8266)
+Leave **Keep media on device** enabled to store the result in onboard flash. A saved image is restored after restart; a saved GIF plays from the ESP32 without the browser or USB data connection. GIFs are limited to 255 frames. **Stop** cancels playback and any incomplete transfer, while **Remove saved media** erases the persistent copy.
 
-### 1. Arduino Setup (Same, but enable Bluetooth)
+The ESP32 must remain powered. If USB is its only power source, unplugging USB turns the board and display off.
 
-In `matrix_display.ino`, ensure:
-```cpp
-#define USE_BLUETOOTH 1    // Enable this
+## 5. Build the installable app
+
+```powershell
+npm run build
+npm run preview
 ```
 
-### 2. Pair with Computer
+Deploy `dist/` at the root of an HTTPS origin. Open it once while online, then use the browser's install option. The installed app shell works offline and continues to communicate directly with the ESP32 over USB.
 
-**Windows:**
-- Settings → Devices → Add Bluetooth device
-- Find "ESP-Display"
-- Pair (PIN: usually 1234 or 0000)
+## First-display checks
 
-**Linux/Mac:**
-- Pair through system Bluetooth settings
-- Note the device MAC address
+The board listing reports this integrated display wiring:
 
-### 3. Find Bluetooth Port
-
-After pairing, you'll get a COM port or device name:
-- **Windows:** Look in Device Manager for "ESP-Display"
-- **Linux:** `bluetoothctl` shows the device
-- **Mac:** Usually `/dev/tty.ESP-Display-SPP`
-
-### 4. Connect via Python or Web
-```bash
-# Same commands, but use Bluetooth port
-python esp_control.py -p COM5 -i image.jpg
-
-# Or use the web dashboard with the Bluetooth COM port
+```text
+MOSI  GPIO23
+SCLK  GPIO18
+CS    GPIO15
+DC    GPIO2
+RST   GPIO4
+BL    GPIO32
 ```
 
----
-
-## Troubleshooting Quick Fixes
-
-| Problem | Solution |
-|---------|----------|
-| "Port not found" | Run `python esp_control.py --list-ports` to see available ports |
-| "Permission denied" | Windows: Run as Administrator, Linux: Use `sudo` or add user to `dialout` group |
-| USB driver error | Download CH340 or CP2102 driver for your ESP board |
-| Image appears corrupted | Verify matrix dimensions: `python esp_control.py -p COM3 -i image.jpg -w 32 -H 8` |
-| Nothing displays | Check LED connections, verify GPIO pin = 5 in Arduino code |
-| Bluetooth won't pair | Reset ESP: Press RST button, try pairing again |
-
----
-
-## Next Steps
-
-- 📖 Read full [README.md](README.md) for advanced features
-- 🎨 Create custom images for your matrix size
-- 🔄 Combine multiple GIFs
-- 🌐 Integrate with other systems via API
-
----
-
-## Example Workflow
-
-```bash
-# Step 1: List available ports
-python esp_control.py --list-ports
-# Output: COM3: USB CH340/CH341
-
-# Step 2: Test connection
-python esp_control.py -p COM3 --test
-# Output: ✓ Connected...
-
-# Step 3: Display image
-python esp_control.py -p COM3 -i sunset.jpg
-
-# Step 4: Display animated GIF
-python esp_control.py -p COM3 -g loading.gif --delay 100
-
-# Step 5: Custom size matrix
-python esp_control.py -p COM3 -i image.jpg -w 64 -H 16
-```
-
----
-
-## Common Image Preparations
-
-**For best results:**
-- Image size: matching your matrix (32x8, 64x16, etc.)
-- Format: PNG or JPG
-- Color: Any - automatically converts to grayscale
-- Contrast: Higher contrast = better details
-
-**Create resized image (macOS/Linux):**
-```bash
-# Using ImageMagick
-convert input.jpg -resize 32x8 output.jpg
-
-# Using ffmpeg
-ffmpeg -i input.jpg -vf scale=32:8 output.jpg
-```
-
-**Extract frames from video (create GIF):**
-```bash
-# Using ffmpeg
-ffmpeg -i video.mp4 -vf scale=32:8 -r 10 animation.gif
-```
-
----
-
-**You're ready to go!** 🚀 Start with Option A (Python CLI) if unsure - it's the simplest!
+If the backlight turns on but graphics are offset or incorrectly colored, adjust the board constants near the top of `firmware/matrix_display.ino`. The current profile assumes an ST7789 240×320 controller with a centered 170-pixel window (`kOffsetX = 35`), inversion enabled, and RGB order.
