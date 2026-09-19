@@ -22,7 +22,7 @@ constexpr uint16_t kControllerHeight = 320;
 constexpr uint16_t kOffsetX = 35;
 constexpr uint16_t kOffsetY = 0;
 constexpr bool kInvert = true;
-constexpr bool kRgbOrder = true;
+constexpr bool kRgbOrder = false;
 constexpr uint32_t kSpiFrequency = 40000000;
 constexpr uint8_t kBacklightPwmChannel = 7;
 }  // namespace board
@@ -223,7 +223,7 @@ bool decodeJpegBuffer(uint8_t *data, uint32_t size, uint16_t width,
       jpeg.getWidth() == width && jpeg.getHeight() == height;
   bool decoded = false;
   if (dimensionsOk) {
-    jpeg.setPixelType(RGB565_LITTLE_ENDIAN);
+    jpeg.setPixelType(RGB565_BIG_ENDIAN);
     renderToDisplay = render;
     if (render) {
       display.setRotation(rotation);
