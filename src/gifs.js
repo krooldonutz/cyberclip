@@ -2,7 +2,7 @@ import { decompressFrames, parseGIF } from 'gifuct-js';
 import { MAX_MEDIA_FILE_SIZE } from './images.js';
 
 export const MAX_GIF_FRAMES = 255;
-export const MIN_FRAME_DELAY_MS = 20;
+export const MIN_FRAME_DELAY_MS = 10;
 
 export async function decodeGif(file) {
   validateGifFile(file);

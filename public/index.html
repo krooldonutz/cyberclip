@@ -33,11 +33,15 @@
           </div>
           <div class="button-row">
             <button id="connect-button" class="button button-primary">Connect</button>
+            <button id="flash-button" class="button button-secondary">Install firmware</button>
             <button id="disconnect-button" class="button button-danger" disabled>Disconnect</button>
           </div>
         </div>
 
         <div id="support-message" class="notice notice-warning" hidden></div>
+        <p class="device-help">
+          Install the bundled Cyberclip firmware directly from Chrome or Edge. Keep the USB cable connected until the board restarts.
+        </p>
         <div id="device-details" class="device-details" aria-live="polite">
           <div><span>Display</span><strong id="device-resolution">170 × 320</strong></div>
           <div><span>Firmware</span><strong id="device-firmware">Not connected</strong></div>
@@ -139,7 +143,7 @@
           <label>
             GIF delay override
             <div class="input-suffix">
-              <input id="gif-delay-input" type="number" min="20" max="60000" placeholder="Source timing">
+              <input id="gif-delay-input" type="number" min="10" max="60000" placeholder="Source timing">
               <span>ms</span>
             </div>
           </label>

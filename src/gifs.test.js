@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_GIF_FRAMES, validateGifFile } from './gifs.js';
+import {
+  MAX_GIF_FRAMES,
+  MIN_FRAME_DELAY_MS,
+  validateGifFile,
+} from './gifs.js';
 
 describe('GIF validation', () => {
   it('rejects non-GIF files', () => {
@@ -15,5 +19,9 @@ describe('GIF validation', () => {
 
   it('keeps the protocol frame limit explicit', () => {
     expect(MAX_GIF_FRAMES).toBe(255);
+  });
+
+  it('supports the 10 ms timing resolution used by GIF source files', () => {
+    expect(MIN_FRAME_DELAY_MS).toBe(10);
   });
 });
