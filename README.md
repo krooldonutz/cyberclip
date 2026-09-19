@@ -22,7 +22,7 @@ The current board profile uses the seller-reported display connections:
 | Reset | GPIO4 |
 | Backlight | GPIO32 |
 
-Board revisions can differ. Verify these pins, the 35-pixel horizontal panel offset, inversion, and RGB/BGR order against the example firmware supplied with your board before relying on the display.
+Board revisions can differ. The current profile uses RGB panel order (`kRgbOrder = false`). Verify these pins, the 35-pixel horizontal panel offset, inversion, and RGB/BGR order against the example firmware supplied with your board before relying on the display.
 
 ## How it works
 
@@ -159,6 +159,8 @@ The physical board profile needs adjustment. Verify these constants in `firmware
 - `kInvert`;
 - `kRgbOrder`;
 - the six TFT/backlight pins.
+
+If red and blue are swapped, toggle `kRgbOrder`, rebuild, and reflash the firmware.
 
 ### GIF playback is slower than expected
 

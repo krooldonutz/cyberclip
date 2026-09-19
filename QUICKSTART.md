@@ -65,4 +65,4 @@ RST   GPIO4
 BL    GPIO32
 ```
 
-If the backlight turns on but graphics are offset or incorrectly colored, adjust the board constants near the top of `firmware/matrix_display.ino`. The current profile assumes an ST7789 240×320 controller with a centered 170-pixel window (`kOffsetX = 35`), inversion enabled, and RGB order.
+If the backlight turns on but graphics are offset or incorrectly colored, adjust the board constants near the top of `firmware/matrix_display.ino`. The current profile assumes an ST7789 240×320 controller with a centered 170-pixel window (`kOffsetX = 35`), inversion enabled, and RGB panel order (`kRgbOrder = false`). If red and blue are swapped on a different board revision, toggle `kRgbOrder`, rebuild, and reflash.
