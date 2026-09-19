@@ -20,6 +20,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "esptool-js": "^0.6.1",
     "gifuct-js": "^2.1.2"
   },
   "devDependencies": {

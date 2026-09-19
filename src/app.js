@@ -1,4 +1,5 @@
 import './styles.css';
+import { flashBundledFirmware } from './flasher.js';
 import { decodeGif, iterateGifFrames } from './gifs.js';
 import { encodeSourceForDisplay, prepareImageFile } from './images.js';
 import {
@@ -26,6 +27,7 @@ const elements = Object.fromEntries([
   'install-button',
   'connect-button',
   'disconnect-button',
+  'flash-button',
   'support-message',
   'device-resolution',
   'device-firmware',
@@ -117,6 +119,7 @@ function initialize() {
 function bindEvents() {
   elements['connect-button'].addEventListener('click', connect);
   elements['disconnect-button'].addEventListener('click', () => transport.disconnect());
+  elements['flash-button'].addEventListener('click', installFirmware);
   elements['media-input'].addEventListener('change', handleMediaSelection);
   elements['display-button'].addEventListener('click', displayImage);
   elements['play-button'].addEventListener('click', playGif);
@@ -150,6 +153,42 @@ function bindEvents() {
     installPrompt = null;
     elements['install-button'].hidden = true;
   });
+}
+
+async function installFirmware() {
+  if (!globalThis.confirm(
+    'Install the bundled Cyberclip firmware? Keep the USB cable connected until installation finishes.',
+  )) {
+    return;
+  }
+
+  let port = transport.port;
+  try {
+    if (!port) port = await navigator.serial.requestPort();
+    if (transport.connected) await transport.disconnect();
+    setState('flashing');
+    setProgress(0, 'Preparing firmware');
+    const manifest = await flashBundledFirmware({
+      port,
+      onProgress(progress) {
+        setProgress(progress, 'Installing firmware');
+      },
+      onStatus(message) {
+        setProgress(elements['transfer-progress'].value, message);
+      },
+    });
+    log(`Installed Cyberclip firmware ${manifest.version}`);
+    setProgress(100, 'Firmware installed');
+    await abortableDelay(1000);
+    await transport.connect({ port });
+  } catch (error) {
+    const message = error.name === 'NotFoundError'
+      ? 'No serial device was selected'
+      : error.message;
+    log(`Firmware installation failed: ${message}`, 'error');
+    setProgress(0, 'Firmware installation failed');
+    setState('disconnected');
+  }
 }
 
 async function connect() {
@@ -257,6 +296,8 @@ async function playGif() {
   playbackController = controller;
   let timingWarningShown = false;
   const persist = shouldPersist();
+  let nextFrameAt = performance.now();
+  let hasDisplayedFrame = false;
 
   try {
     setState('playing');
@@ -266,6 +307,17 @@ async function playGif() {
     do {
       for await (const frame of iterateGifFrames(decodedGif)) {
         throwIfAborted(controller.signal);
+        const requestedDelay = Number(elements['gif-delay-input'].value) || frame.delay;
+        const frameEndsAt = nextFrameAt + requestedDelay;
+        if (!persist && hasDisplayedFrame && performance.now() >= frameEndsAt) {
+          nextFrameAt = frameEndsAt;
+          if (!timingWarningShown) {
+            log('GIF timing is limited by encode and USB transfer speed; late frames will be skipped');
+            timingWarningShown = true;
+          }
+          continue;
+        }
+
         const startedAt = performance.now();
         setProgress(
           Math.round((frame.index / decodedGif.frames.length) * 100),
@@ -273,21 +325,23 @@ async function playGif() {
         );
         const prepared = await encodeSourceForDisplay(frame.canvas, imageOptions());
         showPreview(prepared.blob);
-        const requestedDelay = Number(elements['gif-delay-input'].value) || frame.delay;
         await sendFrame(prepared, controller.signal, {
           label: `Sending frame ${frame.index + 1} of ${decodedGif.frames.length}`,
           frameIndex: frame.index,
           frameCount: decodedGif.frames.length,
           persistentFrame: persist ? { index: frame.index, delay: requestedDelay } : undefined,
         });
+        hasDisplayedFrame = true;
 
         if (persist) continue;
-        const elapsed = performance.now() - startedAt;
+        const completedAt = performance.now();
+        const elapsed = completedAt - startedAt;
+        nextFrameAt = frameEndsAt;
         if (elapsed > requestedDelay && !timingWarningShown) {
-          log(`GIF timing is limited by encode and USB transfer speed (${Math.round(elapsed)} ms per frame)`);
+          log(`GIF timing is limited by encode and USB transfer speed (${Math.round(elapsed)} ms per frame); late frames will be skipped`);
           timingWarningShown = true;
         }
-        await abortableDelay(Math.max(0, requestedDelay - elapsed), controller.signal);
+        await abortableDelay(Math.max(0, nextFrameAt - completedAt), controller.signal);
       }
       if (persist) {
         await finishPlaylist();
@@ -441,11 +495,12 @@ function setState(nextState) {
   state = nextState;
   const connected = transport.connected;
   const ready = nextState === 'ready';
-  const busy = ['processing', 'transferring', 'playing', 'cancelling'].includes(nextState);
+  const busy = ['processing', 'transferring', 'playing', 'cancelling', 'flashing'].includes(nextState);
   const isGif = selectedFile?.type === 'image/gif';
 
   elements['connect-button'].disabled = nextState !== 'disconnected' || !webSerialAvailable;
   elements['disconnect-button'].disabled = !connected || busy;
+  elements['flash-button'].disabled = busy || !webSerialAvailable;
   elements['display-button'].disabled = !ready || !selectedFile || isGif;
   elements['play-button'].disabled = !ready || !decodedGif;
   elements['stop-button'].disabled = !busy;
@@ -560,6 +615,7 @@ function stateLabel(value) {
     transferring: 'Transferring',
     playing: 'Playing GIF',
     cancelling: 'Stopping',
+    flashing: 'Installing firmware',
     disconnecting: 'Disconnecting',
   }[value] ?? value;
 }

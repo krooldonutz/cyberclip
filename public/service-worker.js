@@ -1,4 +1,4 @@
-const CACHE_NAME = 'cyberclip-v3';
+const CACHE_NAME = 'cyberclip-v5';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -6,6 +6,8 @@ const APP_SHELL = [
   '/icons/icon.svg',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
+  '/firmware/manifest.json',
+  '/firmware/cyberclip-2.0.2.bin',
 ];
 
 self.addEventListener('install', (event) => {

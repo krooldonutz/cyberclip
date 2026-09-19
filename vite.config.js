@@ -24,6 +24,7 @@ function emitPwaAssets() {
         copyFile(`${sourceRoot}/manifest.json`, `${outputRoot}/manifest.json`),
         copyFile(`${sourceRoot}/service-worker.js`, `${outputRoot}/service-worker.js`),
         cp(`${sourceRoot}/icons`, `${outputRoot}/icons`, { recursive: true }),
+        cp(`${sourceRoot}/firmware`, `${outputRoot}/firmware`, { recursive: true }),
       ]);
     },
   };

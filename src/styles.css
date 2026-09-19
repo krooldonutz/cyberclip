@@ -111,6 +111,13 @@ h2 {
   margin-top: 20px;
 }
 
+.device-help {
+  margin-top: 14px;
+  color: #94a3b8;
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
 .device-details div {
   display: grid;
   gap: 5px;

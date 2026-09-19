@@ -198,7 +198,7 @@ export function createBeginFramePayload({
   view.setUint32(8, totalSize, true);
   if (persistent) {
     view.setUint16(12, frameIndex, true);
-    view.setUint16(14, Math.min(0xffff, Math.max(20, delayMs ?? 100)), true);
+    view.setUint16(14, Math.min(0xffff, Math.max(10, delayMs ?? 100)), true);
   }
   return payload;
 }

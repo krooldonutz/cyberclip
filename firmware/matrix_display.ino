@@ -90,10 +90,10 @@ constexpr uint32_t kSerialBaud = 921600;
 constexpr uint32_t kMaxFrameSize = 128 * 1024;
 constexpr uint32_t kConservativeStoredBytes = 8 * 1024 * 1024;
 constexpr uint32_t kParserTimeoutMs = 1000;
-constexpr uint16_t kMinimumFrameDelayMs = 20;
+constexpr uint16_t kMinimumFrameDelayMs = 10;
 constexpr uint8_t kFirmwareMajor = 2;
 constexpr uint8_t kFirmwareMinor = 0;
-constexpr uint8_t kFirmwarePatch = 0;
+constexpr uint8_t kFirmwarePatch = 2;
 constexpr char kDeviceName[] = "CyberClip Ideaspark ESP32 ST7789";
 constexpr char kMetadataPath[] = "/playlist.meta";
 constexpr char kMetadataTempPath[] = "/playlist.tmp";
@@ -281,11 +281,8 @@ bool renderPlaylistFrame(const Playlist &playlist, uint16_t frameIndex) {
       (playlist.rotation & 1) ? board::kHeight : board::kWidth;
   const uint16_t height =
       (playlist.rotation & 1) ? board::kWidth : board::kHeight;
-  const bool valid = decodeJpegBuffer(data, size, width, height,
-                                      playlist.rotation, false);
   const bool rendered =
-      valid && decodeJpegBuffer(data, size, width, height,
-                                playlist.rotation, true);
+      decodeJpegBuffer(data, size, width, height, playlist.rotation, true);
   free(data);
   return rendered;
 }
@@ -410,7 +407,21 @@ void advanceStoredPlayback() {
       static_cast<int32_t>(millis() - playback.deadline) < 0) {
     return;
   }
-  const uint16_t frame = playback.nextFrame;
+
+  uint32_t now = millis();
+  uint16_t frame = playback.nextFrame;
+  while (true) {
+    const bool lastFrame = frame + 1 >= activePlaylist.frameCount;
+    const uint32_t frameEnd = playback.deadline + activePlaylist.delays[frame];
+    if (static_cast<int32_t>(now - frameEnd) < 0 ||
+        (lastFrame && !activePlaylist.loop)) {
+      break;
+    }
+    playback.deadline = frameEnd;
+    frame = lastFrame ? 0 : frame + 1;
+    playback.nextFrame = frame;
+  }
+
   if (!renderPlaylistFrame(activePlaylist, frame)) {
     playback.running = false;
     return;
@@ -424,7 +435,7 @@ void advanceStoredPlayback() {
   } else {
     playback.nextFrame = frame + 1;
   }
-  playback.deadline = millis() + activePlaylist.delays[frame];
+  playback.deadline += activePlaylist.delays[frame];
 }
 
 void sendHello(uint16_t sequence) {

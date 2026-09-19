@@ -69,12 +69,14 @@ Web Serial is not currently supported by Firefox or Safari. Connecting always re
 
 The firmware dependencies are pinned in `firmware/platformio.ini`.
 
+The web installer uses the prebuilt firmware image referenced by `public/firmware/manifest.json` and validates its metadata before flashing. It writes the bootloader, partition table, and application image without erasing the LittleFS media partition.
+
 ## Quick start
 
-1. Flash `firmware/matrix_display.ino` using the PlatformIO configuration in `firmware/platformio.ini`.
-2. Connect the board using a data-capable USB cable.
-3. Open the Cyberclip web app in desktop Chrome or Edge.
-4. Select **Connect**, choose the CH340 serial device, and approve access.
+1. Connect the board using a data-capable USB cable.
+2. Open the Cyberclip web app in desktop Chrome or Edge.
+3. Select **Install firmware**, choose the CH340 serial device, and keep it connected until the board restarts.
+4. Select **Connect** and approve access if the browser prompts again.
 5. Wait for Cyberclip to verify the firmware and display capabilities.
 6. Choose an image or GIF, adjust its fit/rotation/quality, then select **Display image** or **Play GIF**.
 
@@ -109,6 +111,8 @@ The deployable static site is written to `dist/`. Deploy it at the origin root o
 If a JPEG exceeds the device limit, Cyberclip lowers quality to a bounded minimum. It reports an error instead of sending a frame that still does not fit.
 
 GIFs are decoded and composited in the browser. Each frame is resized, JPEG-encoded, transferred, and acknowledged. With persistence enabled, the frames and delays are committed atomically to flash and the ESP32 takes over playback. Without persistence, the browser continues scheduling frames and playback stops when USB disconnects.
+
+Source GIF timing is preserved per frame at the format's 10 ms resolution unless a GIF delay override is set. Playback uses cumulative deadlines and skips frames whose display window has already expired, preserving the animation's original speed when encoding, transfer, or display decoding cannot sustain every frame.
 
 Persisted images and GIFs survive reset and power loss. The board still needs power: disconnecting USB also turns the display off unless the ESP32 is powered from another suitable source.
 

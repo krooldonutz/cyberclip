@@ -99,6 +99,20 @@ describe('persistent media payloads', () => {
     expect(view.getUint16(14, true)).toBe(75);
   });
 
+  it('preserves GIF delays down to the source format resolution', () => {
+    const payload = createBeginFramePayload({
+      transferId: 7,
+      width: 170,
+      height: 320,
+      rotation: 0,
+      totalSize: 12345,
+      frameIndex: 0,
+      delayMs: 10,
+    });
+
+    expect(new DataView(payload.buffer).getUint16(14, true)).toBe(10);
+  });
+
   it('encodes playlist metadata', () => {
     expect(createBeginPlaylistPayload({
       mediaType: 2,
