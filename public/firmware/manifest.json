@@ -1,6 +1,6 @@
 {
-  "version": "2.0.2",
-  "path": "/firmware/cyberclip-2.0.2.bin",
+  "version": "2.0.3",
+  "path": "/firmware/cyberclip-2.0.3.bin",
   "address": 0,
-  "size": 500224
+  "size": 517056
 }

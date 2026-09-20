@@ -15,8 +15,8 @@ describe('bundled firmware flashing', () => {
     const firmware = [1, 2, 3, 4];
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(response({
-        version: '2.0.2',
-        path: '/firmware/cyberclip-2.0.2.bin',
+        version: '2.0.3',
+        path: '/firmware/cyberclip-2.0.3.bin',
         address: 0,
         size: firmware.length,
       }))
@@ -52,7 +52,7 @@ describe('bundled firmware flashing', () => {
       SerialTransport: FakeTransport,
     });
 
-    expect(manifest.version).toBe('2.0.2');
+    expect(manifest.version).toBe('2.0.3');
     expect(writeFlash).toHaveBeenCalledWith(expect.objectContaining({
       fileArray: [{ data: Uint8Array.from(firmware), address: 0 }],
       eraseAll: false,
@@ -69,8 +69,8 @@ describe('bundled firmware flashing', () => {
   it('rejects a firmware image whose size does not match its manifest', async () => {
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(response({
-        version: '2.0.2',
-        path: '/firmware/cyberclip-2.0.2.bin',
+        version: '2.0.3',
+        path: '/firmware/cyberclip-2.0.3.bin',
         address: 0,
         size: 5,
       }))
