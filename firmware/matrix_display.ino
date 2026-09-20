@@ -3,6 +3,7 @@
 #include <LittleFS.h>
 #include <LovyanGFX.hpp>
 #include <esp_heap_caps.h>
+#include <esp_sleep.h>
 
 #include "protocol.h"
 
@@ -91,9 +92,11 @@ constexpr uint32_t kMaxFrameSize = 128 * 1024;
 constexpr uint32_t kConservativeStoredBytes = 8 * 1024 * 1024;
 constexpr uint32_t kParserTimeoutMs = 1000;
 constexpr uint16_t kMinimumFrameDelayMs = 10;
+constexpr gpio_num_t kSleepButton = GPIO_NUM_0;
+constexpr uint32_t kSleepButtonDebounceMs = 30;
 constexpr uint8_t kFirmwareMajor = 2;
 constexpr uint8_t kFirmwareMinor = 0;
-constexpr uint8_t kFirmwarePatch = 2;
+constexpr uint8_t kFirmwarePatch = 3;
 constexpr char kDeviceName[] = "CyberClip Ideaspark ESP32 ST7789";
 constexpr char kMetadataPath[] = "/playlist.meta";
 constexpr char kMetadataTempPath[] = "/playlist.tmp";
@@ -135,8 +138,34 @@ struct Playback {
 uint8_t backlight = 255;
 bool renderToDisplay = false;
 bool filesystemMounted = false;
+bool sleepButtonArmed = false;
 
 bool startStoredPlayback();
+
+void pollSleepButton() {
+  const bool pressed = digitalRead(kSleepButton) == LOW;
+
+  if (!sleepButtonArmed) {
+    if (!pressed) sleepButtonArmed = true;
+    return;
+  }
+  if (!pressed) return;
+
+  delay(kSleepButtonDebounceMs);
+  if (digitalRead(kSleepButton) != LOW) return;
+
+  display.setBrightness(0);
+  display.sleep();
+  Serial.flush();
+
+  while (digitalRead(kSleepButton) == LOW) {
+    delay(10);
+  }
+  delay(kSleepButtonDebounceMs);
+
+  esp_sleep_enable_ext0_wakeup(kSleepButton, LOW);
+  esp_deep_sleep_start();
+}
 
 void releaseTransfer() {
   free(transfer.data);
@@ -901,6 +930,7 @@ class FrameParser {
 void setup() {
   Serial.setRxBufferSize(8192);
   Serial.begin(kSerialBaud);
+  pinMode(kSleepButton, INPUT_PULLUP);
   display.init();
   display.setBrightness(backlight);
   display.setRotation(0);
@@ -917,5 +947,6 @@ void loop() {
   }
   parser.pollTimeout();
   advanceStoredPlayback();
+  pollSleepButton();
   yield();
 }

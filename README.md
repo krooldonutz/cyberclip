@@ -116,6 +116,8 @@ Source GIF timing is preserved per frame at the format's 10 ms resolution unless
 
 Persisted images and GIFs survive reset and power loss. The board still needs power: disconnecting USB also turns the display off unless the ESP32 is powered from another suitable source.
 
+Press the board's **BOOT** button during normal operation to enter deep sleep and turn off the display. Press **BOOT** again to wake the board and resume persisted media. Deep sleep minimizes consumption but does not physically disconnect power. The **EN/RESET** button remains a hardware reset, and holding BOOT while resetting or connecting power still enters the ESP32 firmware-download mode.
+
 ## USB protocol
 
 Every packet uses little-endian numeric fields:
