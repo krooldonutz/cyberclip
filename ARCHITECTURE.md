@@ -90,7 +90,7 @@ The CRC starts at the version byte and ends after the payload. Maximum wire payl
 
 ## GIF pipeline
 
-The browser composites each source GIF frame according to transparency and disposal rules, resizes it to the selected display rotation, JPEG-encodes it, transfers it, and waits for render acknowledgement. With persistence disabled, the browser schedules those frames directly. With persistence enabled, it uploads each frame once and the firmware schedules playback from LittleFS.
+The browser composites each source GIF frame according to transparency and disposal rules, resizes it to the selected display rotation, JPEG-encodes it, transfers it, and waits for render acknowledgement. With persistence disabled, the browser schedules those frames directly. With persistence enabled, the firmware shows byte-level progress across the complete playlist while each frame is validated and stored without rendering it. After the inactive LittleFS generation is complete and atomically activated, the firmware renders the first frame and schedules playback.
 
 The effective interval for each frame is:
 

@@ -96,10 +96,17 @@ constexpr gpio_num_t kSleepButton = GPIO_NUM_0;
 constexpr uint32_t kSleepButtonDebounceMs = 30;
 constexpr uint8_t kFirmwareMajor = 2;
 constexpr uint8_t kFirmwareMinor = 0;
-constexpr uint8_t kFirmwarePatch = 3;
+constexpr uint8_t kFirmwarePatch = 5;
 constexpr char kDeviceName[] = "CyberClip Ideaspark ESP32 ST7789";
 constexpr char kMetadataPath[] = "/playlist.meta";
 constexpr char kMetadataTempPath[] = "/playlist.tmp";
+constexpr char kProgressLabel[] = "Media is being loaded";
+constexpr uint16_t kProgressBackgroundColor = 0x0000;
+constexpr uint16_t kProgressBorderColor = 0xffff;
+constexpr uint16_t kProgressFillColor = 0x05ff;
+constexpr int16_t kProgressMargin = 16;
+constexpr int16_t kProgressHeight = 18;
+constexpr int16_t kProgressBorder = 2;
 
 MatrixDisplay display;
 JPEGDEC jpeg;
@@ -135,12 +142,69 @@ struct Playback {
   bool running = false;
 } playback;
 
+struct UploadProgress {
+  int16_t x = 0;
+  int16_t y = 0;
+  int16_t innerWidth = 0;
+  uint16_t filledPixels = UINT16_MAX;
+  bool visible = false;
+} uploadProgress;
+
 uint8_t backlight = 255;
 bool renderToDisplay = false;
 bool filesystemMounted = false;
 bool sleepButtonArmed = false;
 
 bool startStoredPlayback();
+
+void showUploadProgress(uint8_t rotation) {
+  display.setRotation(rotation);
+  display.fillScreen(kProgressBackgroundColor);
+  const int16_t width = display.width() - kProgressMargin * 2;
+  uploadProgress.x = kProgressMargin;
+  uploadProgress.y = (display.height() - kProgressHeight) / 2;
+  uploadProgress.innerWidth = width - kProgressBorder * 2;
+  uploadProgress.filledPixels = UINT16_MAX;
+  uploadProgress.visible = true;
+  display.setTextSize(1);
+  display.setTextColor(kProgressBorderColor, kProgressBackgroundColor);
+  const int16_t labelX = (display.width() - display.textWidth(kProgressLabel)) / 2;
+  display.setCursor(labelX > 0 ? labelX : 0,
+                    uploadProgress.y - display.fontHeight() - 10);
+  display.print(kProgressLabel);
+  display.drawRect(uploadProgress.x, uploadProgress.y, width, kProgressHeight,
+                   kProgressBorderColor);
+  display.drawRect(uploadProgress.x + 1, uploadProgress.y + 1, width - 2,
+                   kProgressHeight - 2, kProgressBorderColor);
+}
+
+void updateUploadProgress(uint16_t completedFrames, uint32_t receivedBytes,
+                          uint32_t totalBytes) {
+  if (!uploadProgress.visible || !stagingPlaylist.valid) return;
+  const uint16_t filled = uploadProgressPixels(
+      uploadProgress.innerWidth, stagingPlaylist.frameCount, completedFrames,
+      receivedBytes, totalBytes);
+  if (filled == uploadProgress.filledPixels) return;
+  const int16_t innerX = uploadProgress.x + kProgressBorder;
+  const int16_t innerY = uploadProgress.y + kProgressBorder;
+  const int16_t innerHeight = kProgressHeight - kProgressBorder * 2;
+  if (filled > 0) {
+    display.fillRect(innerX, innerY, filled, innerHeight, kProgressFillColor);
+  }
+  if (filled < uploadProgress.innerWidth) {
+    display.fillRect(innerX + filled, innerY,
+                     uploadProgress.innerWidth - filled, innerHeight,
+                     kProgressBackgroundColor);
+  }
+  uploadProgress.filledPixels = filled;
+}
+
+void restoreActiveOrClear(uint8_t fallbackRotation) {
+  uploadProgress = UploadProgress{};
+  if (activePlaylist.valid && startStoredPlayback()) return;
+  display.setRotation(fallbackRotation);
+  display.fillScreen(TFT_BLACK);
+}
 
 void pollSleepButton() {
   const bool pressed = digitalRead(kSleepButton) == LOW;
@@ -190,13 +254,14 @@ bool removeGeneration(uint8_t generation) {
 
 bool cancelStaging() {
   if (!stagingPlaylist.valid) return true;
+  const uint8_t rotation = stagingPlaylist.rotation;
   if (transfer.active && transfer.persistent) releaseTransfer();
   const bool removed = removeGeneration(stagingPlaylist.generation);
   const bool tempRemoved =
       !LittleFS.exists(kMetadataTempPath) ||
       LittleFS.remove(kMetadataTempPath);
   stagingPlaylist = Playlist{};
-  if (activePlaylist.valid) startStoredPlayback();
+  restoreActiveOrClear(rotation);
   return removed && tempRemoved;
 }
 
@@ -600,6 +665,9 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
       transfer.rotation = rotation;
       transfer.persistent = persistent;
       transfer.active = true;
+      if (persistent) {
+        updateUploadProgress(stagingPlaylist.storedCount, 0, transfer.total);
+      }
       sendAck(sequence, command);
       return;
     }
@@ -626,6 +694,10 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
       }
       memcpy(transfer.data + transfer.received, payload + 6, dataLength);
       transfer.received += dataLength;
+      if (transfer.persistent) {
+        updateUploadProgress(stagingPlaylist.storedCount, transfer.received,
+                             transfer.total);
+      }
       sendAck(sequence, command);
       return;
     }
@@ -658,15 +730,8 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
         stagingPlaylist.delays[transfer.frameIndex] =
             max(transfer.delayMs, kMinimumFrameDelayMs);
         ++stagingPlaylist.storedCount;
-      }
-      if (!decodeTransfer(true)) {
-        if (transfer.persistent) {
-          char path[12];
-          framePath(path, sizeof(path), stagingPlaylist.generation,
-                    transfer.frameIndex);
-          LittleFS.remove(path);
-          --stagingPlaylist.storedCount;
-        }
+        updateUploadProgress(stagingPlaylist.storedCount, 0, 0);
+      } else if (!decodeTransfer(true)) {
         sendNack(sequence, command, DECODE_FAILED);
         releaseTransfer();
         return;
@@ -760,6 +825,8 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
       stagingPlaylist.loop = loop;
       stagingPlaylist.valid = true;
       playback.running = false;
+      showUploadProgress(rotation);
+      updateUploadProgress(0, 0, 0);
       sendAck(sequence, command);
       return;
     }
@@ -792,16 +859,15 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
         return;
       }
       if (!LittleFS.rename(kMetadataTempPath, kMetadataPath)) {
-        if (previous.valid) {
-          activePlaylist = previous;
-          startStoredPlayback();
-        }
+        activePlaylist = previous;
+        restoreActiveOrClear(stagingPlaylist.rotation);
         sendNack(sequence, command, NO_MEMORY);
         return;
       }
       activePlaylist = stagingPlaylist;
       activePlaylist.valid = true;
       stagingPlaylist = Playlist{};
+      uploadProgress = UploadProgress{};
       schedulePlaybackAfterFirstFrame();
       if (previous.valid &&
           previous.generation != activePlaylist.generation) {
