@@ -22,6 +22,18 @@ void test_little_endian_helpers() {
   TEST_ASSERT_EQUAL_HEX16(0x1234, readLe16(bytes));
 }
 
+void test_upload_progress_pixels() {
+  TEST_ASSERT_EQUAL_UINT16(0, uploadProgressPixels(100, 0, 0, 0, 0));
+  TEST_ASSERT_EQUAL_UINT16(0, uploadProgressPixels(100, 4, 0, 0, 1000));
+  TEST_ASSERT_EQUAL_UINT16(12, uploadProgressPixels(100, 4, 0, 500, 1000));
+  TEST_ASSERT_EQUAL_UINT16(37, uploadProgressPixels(100, 4, 1, 500, 1000));
+  TEST_ASSERT_EQUAL_UINT16(75, uploadProgressPixels(100, 4, 3, 0, 0));
+  TEST_ASSERT_EQUAL_UINT16(100,
+                           uploadProgressPixels(100, 4, 4, 0, 1000));
+  TEST_ASSERT_EQUAL_UINT16(
+      25, uploadProgressPixels(100, 4, 0, UINT32_MAX, UINT32_MAX));
+}
+
 void test_protocol_v2_playlist_metadata_integrity() {
   uint8_t metadata[playlistMetadataSize(2)] = {
       'C', 'C', 'P', 'L', kPlaylistMetadataVersion, 1, MEDIA_GIF, 2, 3, 1};
@@ -43,6 +55,7 @@ void runTests() {
   UNITY_BEGIN();
   RUN_TEST(test_crc_standard_vector);
   RUN_TEST(test_little_endian_helpers);
+  RUN_TEST(test_upload_progress_pixels);
   RUN_TEST(test_protocol_v2_playlist_metadata_integrity);
   UNITY_END();
 }

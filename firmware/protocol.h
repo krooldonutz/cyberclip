@@ -98,6 +98,24 @@ inline void writeLe32(uint8_t *p, uint32_t value) {
   p[3] = static_cast<uint8_t>(value >> 24);
 }
 
+inline uint16_t uploadProgressPixels(uint16_t width, uint16_t frameCount,
+                                     uint16_t completedFrames,
+                                     uint32_t receivedBytes,
+                                     uint32_t totalBytes) {
+  if (width == 0 || frameCount == 0) return 0;
+  if (completedFrames >= frameCount) return width;
+  if (totalBytes == 0) {
+    return static_cast<uint16_t>(
+        (static_cast<uint32_t>(width) * completedFrames) / frameCount);
+  }
+  if (receivedBytes > totalBytes) receivedBytes = totalBytes;
+  const uint64_t completedUnits =
+      static_cast<uint64_t>(completedFrames) * totalBytes + receivedBytes;
+  const uint64_t totalUnits = static_cast<uint64_t>(frameCount) * totalBytes;
+  return static_cast<uint16_t>(
+      (static_cast<uint64_t>(width) * completedUnits) / totalUnits);
+}
+
 inline size_t playlistMetadataSize(uint8_t frameCount) {
   return kPlaylistMetadataHeaderSize +
          static_cast<size_t>(frameCount) * sizeof(uint16_t) +

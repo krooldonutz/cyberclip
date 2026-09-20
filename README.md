@@ -110,7 +110,7 @@ The deployable static site is written to `dist/`. Deploy it at the origin root o
 
 If a JPEG exceeds the device limit, Cyberclip lowers quality to a bounded minimum. It reports an error instead of sending a frame that still does not fit.
 
-GIFs are decoded and composited in the browser. Each frame is resized, JPEG-encoded, transferred, and acknowledged. With persistence enabled, the frames and delays are committed atomically to flash and the ESP32 takes over playback. Without persistence, the browser continues scheduling frames and playback stops when USB disconnects.
+GIFs are decoded and composited in the browser. Each frame is resized, JPEG-encoded, transferred, and acknowledged. With persistence enabled, the ESP32 shows upload progress instead of rendering incomplete media; after the frames and delays are committed atomically to flash, it takes over playback. Cancelled or failed uploads restore the previously saved media. Without persistence, the browser continues scheduling frames and playback stops when USB disconnects.
 
 Source GIF timing is preserved per frame at the format's 10 ms resolution unless a GIF delay override is set. Playback uses cumulative deadlines and skips frames whose display window has already expired, preserving the animation's original speed when encoding, transfer, or display decoding cannot sustain every frame.
 
