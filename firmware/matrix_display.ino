@@ -2,6 +2,8 @@
 #include <JPEGDEC.h>
 #include <LittleFS.h>
 #include <LovyanGFX.hpp>
+#include <driver/gpio.h>
+#include <driver/rtc_io.h>
 #include <esp_heap_caps.h>
 #include <esp_sleep.h>
 
@@ -96,7 +98,7 @@ constexpr gpio_num_t kSleepButton = GPIO_NUM_0;
 constexpr uint32_t kSleepButtonDebounceMs = 30;
 constexpr uint8_t kFirmwareMajor = 2;
 constexpr uint8_t kFirmwareMinor = 0;
-constexpr uint8_t kFirmwarePatch = 5;
+constexpr uint8_t kFirmwarePatch = 11;
 constexpr char kDeviceName[] = "CyberClip Ideaspark ESP32 ST7789";
 constexpr char kMetadataPath[] = "/playlist.meta";
 constexpr char kMetadataTempPath[] = "/playlist.tmp";
@@ -226,6 +228,11 @@ void pollSleepButton() {
     delay(10);
   }
   delay(kSleepButtonDebounceMs);
+
+  gpio_hold_dis(static_cast<gpio_num_t>(board::kBacklight));
+  pinMode(board::kBacklight, OUTPUT);
+  digitalWrite(board::kBacklight, LOW);
+  gpio_hold_en(static_cast<gpio_num_t>(board::kBacklight));
 
   esp_sleep_enable_ext0_wakeup(kSleepButton, LOW);
   esp_deep_sleep_start();
@@ -996,7 +1003,9 @@ class FrameParser {
 void setup() {
   Serial.setRxBufferSize(8192);
   Serial.begin(kSerialBaud);
+  rtc_gpio_deinit(kSleepButton);
   pinMode(kSleepButton, INPUT_PULLUP);
+  gpio_hold_dis(static_cast<gpio_num_t>(board::kBacklight));
   display.init();
   display.setBrightness(backlight);
   display.setRotation(0);

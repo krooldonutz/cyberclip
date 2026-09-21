@@ -65,7 +65,18 @@ Web Serial is not currently supported by Firefox or Safari. Connecting always re
 
 ### Building the firmware
 
-- [PlatformIO](https://platformio.org/) through VS Code or its CLI
+Create a versioned, merged firmware image for the web installer with one
+PowerShell command from the repository root:
+
+```powershell
+.\scripts\build-firmware.ps1 <major>.<minor>.<patch>
+```
+
+Python 3 is required. The script installs
+[PlatformIO Core](https://platformio.org/) with pip when needed, builds the
+firmware, merges all ESP32 boot components, updates the firmware manifest and
+service-worker cache, and removes the previously published binary. The version
+argument must be newer than the version in `public/firmware/manifest.json`.
 
 The firmware dependencies are pinned in `firmware/platformio.ini`.
 
