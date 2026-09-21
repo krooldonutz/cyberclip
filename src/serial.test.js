@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Command, PacketDecoder, encodePacket } from './protocol.js';
 import { SerialTransport } from './serial.js';
 
@@ -63,5 +63,40 @@ describe('SerialTransport', () => {
 
     await transport.disconnect();
     expect(transport.connected).toBe(false);
+  });
+
+  it('allows a slow firmware startup during the capability handshake', async () => {
+    vi.useFakeTimers();
+    try {
+      const port = createFakeDevice();
+      const originalWritable = port.writable;
+      port.writable = new WritableStream({
+        async write(bytes) {
+          await vi.advanceTimersByTimeAsync(6000);
+          const writer = originalWritable.getWriter();
+          try {
+            await writer.write(bytes);
+          } finally {
+            writer.releaseLock();
+          }
+        },
+      });
+      const serial = {
+        requestPort: async () => port,
+        addEventListener() {},
+        removeEventListener() {},
+      };
+      const transport = new SerialTransport({ serial });
+
+      const connection = transport.connect();
+      await vi.advanceTimersByTimeAsync(7000);
+
+      await expect(connection).resolves.toMatchObject({
+        firmwareVersion: '1.0.0',
+      });
+      await transport.disconnect();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

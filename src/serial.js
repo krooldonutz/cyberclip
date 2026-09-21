@@ -10,6 +10,7 @@ import {
 
 export const SERIAL_BAUD_RATE = 921600;
 const REQUEST_TIMEOUT_MS = 5000;
+const HANDSHAKE_TIMEOUT_MS = 20000;
 
 export class SerialTransport {
   constructor({
@@ -63,6 +64,7 @@ export class SerialTransport {
 
       const response = await this.request(Command.HELLO, new Uint8Array(), {
         expectedCommand: Command.HELLO_RESPONSE,
+        timeoutMs: HANDSHAKE_TIMEOUT_MS,
       });
       if (response.version !== PROTOCOL_VERSION) {
         throw new ProtocolError(`Unsupported firmware protocol version ${response.version}`);
