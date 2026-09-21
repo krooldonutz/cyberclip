@@ -1,6 +1,7 @@
 import { ESPLoader, Transport } from 'esptool-js';
 
 export const FIRMWARE_MANIFEST_URL = '/firmware/manifest.json';
+export const FLASH_BAUD_RATE = 115200;
 
 export async function flashBundledFirmware({
   port,
@@ -26,7 +27,7 @@ export async function flashBundledFirmware({
   const serialTransport = new SerialTransport(port, false);
   const loader = new Loader({
     transport: serialTransport,
-    baudrate: 921600,
+    baudrate: FLASH_BAUD_RATE,
     terminal: {
       clean() {},
       write() {},

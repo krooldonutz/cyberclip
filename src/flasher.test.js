@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { flashBundledFirmware } from './flasher.js';
+import { FLASH_BAUD_RATE, flashBundledFirmware } from './flasher.js';
 
 function response(body, { ok = true, status = 200 } = {}) {
   return {
@@ -34,6 +34,10 @@ describe('bundled firmware flashing', () => {
     });
     const after = vi.fn().mockResolvedValue();
     class FakeLoader {
+      constructor(options) {
+        expect(options.baudrate).toBe(FLASH_BAUD_RATE);
+      }
+
       chip = { CHIP_NAME: 'ESP32' };
 
       main = vi.fn().mockResolvedValue('ESP32');

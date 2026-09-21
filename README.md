@@ -168,6 +168,15 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) and `firmware/protocol.h` for the complet
 - Press the board reset button and reconnect.
 - Check the activity log for protocol-version or timeout details.
 
+### Firmware installation reports an invalid packet header
+
+- Hold **BOOT** while the installer enters the ESP32 bootloader, then release it
+  when installation begins.
+- Disconnect other serial monitors and try another data-capable cable or USB
+  port.
+- On macOS, remove conflicting third-party CH340 drivers when the built-in
+  driver already recognizes the device.
+
 ### Image is shifted, mirrored, or has incorrect colors
 
 The physical board profile needs adjustment. Verify these constants in `firmware/matrix_display.ino`:
