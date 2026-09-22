@@ -1,5 +1,6 @@
 #pragma once
 
+#include <ESPAsyncWebServer.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -24,6 +25,11 @@ namespace cyberclip {
 // safe to call, even before the server has started.
 void wsServerBegin();
 void wsServerPoll();
+
+// The single shared HTTP/WebSocket server, bound to port 80. Only one
+// AsyncWebServer can bind that port, so setup_portal.cpp registers its own
+// captive-portal routes on this same instance rather than creating another.
+AsyncWebServer &wsHttpServer();
 
 // Pops the next queued inbound byte into *out. Returns false if empty.
 bool wsReadByte(uint8_t *out);

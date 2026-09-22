@@ -131,11 +131,14 @@ void WifiManager::connectIfNeeded() {
   if (lastAttemptAt_ != 0 && now - lastAttemptAt_ < kReconnectIntervalMs) return;
   lastAttemptAt_ = now;
   status_.state = WIFI_CONNECTING;
-  WiFi.mode(WIFI_STA);
+  // enableSTA (rather than WiFi.mode(WIFI_STA)) adds STA capability
+  // without disturbing an access point the setup portal may already have
+  // up - WiFi.mode() sets an absolute mode and would tear the AP down.
+  WiFi.enableSTA(true);
   WiFi.setHostname(status_.hostname);
-  // Only safe to start once WiFi.mode(WIFI_STA) has brought up LWIP's
-  // tcpip task; wsServerBegin() is idempotent, so repeated reconnect
-  // attempts are harmless.
+  // Only safe to start once WiFi has brought up LWIP's tcpip task (which
+  // enableSTA(true) does); wsServerBegin() is idempotent, so repeated
+  // reconnect attempts are harmless.
   wsServerBegin();
   WiFi.begin(ssid_, password_);
 }
@@ -164,6 +167,8 @@ void WifiManager::poll() {
 }
 
 WifiStatus WifiManager::status() const { return status_; }
+
+bool WifiManager::hasCredentials() const { return hasCredentials_; }
 
 bool WifiManager::checkToken(const uint8_t *token, size_t length) const {
   if (!hasToken_ || !token || length != sizeof(token_)) return false;

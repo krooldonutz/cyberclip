@@ -129,6 +129,8 @@ function initialize() {
   const lastHost = localStorage.getItem(WIFI_LAST_HOST_KEY);
   if (lastHost) elements['wifi-host-input'].value = lastHost;
 
+  applyWifiHandoffFromUrl();
+
   if (import.meta.env.PROD && 'serviceWorker' in navigator && globalThis.isSecureContext) {
     navigator.serviceWorker.register('/service-worker.js').catch((error) => {
       log(`Offline support could not start: ${error.message}`, 'error');
@@ -243,6 +245,22 @@ async function connectUsb() {
     if (reportedError) log(`Connection failed: ${reportedError.message}`, 'error');
     setState('disconnected');
   }
+}
+
+// Handles the handoff from the board's own QR code (phone-only setup, no
+// USB/computer involved - see firmware/src/setup_portal.h): the QR link
+// carries the device's IP and pairing token as query params so scanning it
+// can connect immediately, with no typing.
+function applyWifiHandoffFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const host = params.get('host');
+  const token = params.get('token')?.toLowerCase();
+  if (!host || !/^[0-9a-f]{32}$/.test(token ?? '')) return;
+
+  history.replaceState(null, '', window.location.pathname);
+  saveWifiPairing(host, token);
+  log(`Scanned WiFi setup for ${host}, connecting...`);
+  void connectWifi();
 }
 
 async function connectWifi() {

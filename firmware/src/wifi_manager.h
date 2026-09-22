@@ -13,6 +13,13 @@ struct WifiStatus {
   char hostname[33] = "cyberclip";
 };
 
+// Base URL of your deployed Cyberclip web app (see README.md's phone-only
+// setup section), e.g. "https://cyberclip.example.com/". Leave empty to
+// skip the QR code during phone-only setup and show the IP address as
+// plain text instead. Defined in matrix_display.ino, next to the other
+// board-specific constants (kOffsetX, kInvert, ...).
+extern const char kAppBaseUrl[];
+
 // Owns WiFi credentials/pairing-token storage (NVS via Preferences) and the
 // station connection lifecycle. WiFi stays off until credentials are
 // provisioned over USB, so a USB-only user never pays for an idle radio.
@@ -31,6 +38,7 @@ class WifiManager {
   void setEnabled(bool enabled);
 
   WifiStatus status() const;
+  bool hasCredentials() const;
   bool checkToken(const uint8_t *token, size_t length) const;
 
  private:
