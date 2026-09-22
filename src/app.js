@@ -332,13 +332,15 @@ async function setupWifi() {
 }
 
 async function forgetWifi() {
-  if (!serialTransport.connected) {
-    log('Connect over USB first to forget WiFi', 'error');
+  if (!activeTransport.connected) {
+    log('Connect first to forget WiFi', 'error');
     return;
   }
+  const viaWifi = activeTransport === wifiTransport;
   try {
-    await serialTransport.request(Command.CLEAR_WIFI_CREDENTIALS, new Uint8Array());
-    log('The device forgot its WiFi network. Set up WiFi again to reconnect wirelessly.');
+    await activeTransport.request(Command.CLEAR_WIFI_CREDENTIALS, new Uint8Array());
+    log('The device forgot its WiFi network. Set up WiFi again (over USB) to reconnect wirelessly.');
+    if (viaWifi) log('That was sent over WiFi, so this browser will now disconnect.');
   } catch (error) {
     log(`Could not forget WiFi: ${error.message}`, 'error');
   }
@@ -631,7 +633,9 @@ function setState(nextState) {
   elements['connect-button'].disabled = nextState !== 'disconnected' || !webSerialAvailable;
   elements['connect-wifi-button'].disabled = nextState !== 'disconnected';
   elements['setup-wifi-button'].disabled = !ready || !connectedViaUsb;
-  elements['forget-wifi-button'].disabled = !ready || !connectedViaUsb;
+  // Unlike Set up WiFi, forgetting doesn't need to survive the connection
+  // it was sent over, so it works from either transport.
+  elements['forget-wifi-button'].disabled = !ready;
   elements['disconnect-button'].disabled = !connected || busy;
   elements['flash-button'].disabled = busy || !webSerialAvailable;
   elements['display-button'].disabled = !ready || !selectedFile || isGif;

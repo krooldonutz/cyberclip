@@ -106,6 +106,14 @@ constexpr uint32_t kParserTimeoutMs = 1000;
 constexpr uint16_t kMinimumFrameDelayMs = 10;
 constexpr gpio_num_t kSleepButton = GPIO_NUM_0;
 constexpr uint32_t kSleepButtonDebounceMs = 30;
+// Holding BOOT this long forgets WiFi and reboots into setup-portal mode
+// (see WifiManager::clearCredentials() / setupPortalBegin()) - for a lost
+// pairing token or a board moved to a different network, with no phone
+// connectivity or computer needed. A quick press-release still puts the
+// display to sleep exactly as before; feedback only appears past
+// kWifiResetFeedbackDelayMs so a normal sleep press looks unchanged.
+constexpr uint32_t kWifiResetHoldMs = 5000;
+constexpr uint32_t kWifiResetFeedbackDelayMs = 800;
 constexpr uint8_t kFirmwareMajor = 2;
 constexpr uint8_t kFirmwareMinor = 0;
 constexpr uint8_t kFirmwarePatch = 11;
@@ -225,6 +233,32 @@ void restoreActiveOrClear(uint8_t fallbackRotation) {
   display.fillScreen(TFT_BLACK);
 }
 
+void showWifiResetHint(uint32_t remainingSeconds) {
+  display.setRotation(0);
+  display.fillScreen(TFT_BLACK);
+  display.setTextColor(TFT_WHITE, TFT_BLACK);
+  display.setTextSize(1);
+  display.setCursor(10, 130);
+  display.println("Keep holding to forget WiFi...");
+  display.setCursor(10, 160);
+  display.setTextSize(2);
+  display.print(remainingSeconds);
+}
+
+void enterDeepSleep() {
+  display.setBrightness(0);
+  display.sleep();
+  Serial.flush();
+
+  gpio_hold_dis(static_cast<gpio_num_t>(board::kBacklight));
+  pinMode(board::kBacklight, OUTPUT);
+  digitalWrite(board::kBacklight, LOW);
+  gpio_hold_en(static_cast<gpio_num_t>(board::kBacklight));
+
+  esp_sleep_enable_ext0_wakeup(kSleepButton, LOW);
+  esp_deep_sleep_start();
+}
+
 void pollSleepButton() {
   const bool pressed = digitalRead(kSleepButton) == LOW;
 
@@ -237,22 +271,36 @@ void pollSleepButton() {
   delay(kSleepButtonDebounceMs);
   if (digitalRead(kSleepButton) != LOW) return;
 
-  display.setBrightness(0);
-  display.sleep();
-  Serial.flush();
-
+  // Measure how long BOOT stays held before committing to either action -
+  // unlike before, the display must not sleep immediately, since a long
+  // hold needs to show a countdown and reset WiFi instead.
+  const uint32_t pressStart = millis();
+  uint32_t lastRenderedSecond = UINT32_MAX;
   while (digitalRead(kSleepButton) == LOW) {
+    const uint32_t heldMs = millis() - pressStart;
+    if (heldMs >= kWifiResetHoldMs) {
+      wifiManager.clearCredentials();
+      display.setRotation(0);
+      display.fillScreen(TFT_BLACK);
+      display.setTextColor(TFT_WHITE, TFT_BLACK);
+      display.setTextSize(1);
+      display.setCursor(10, 140);
+      display.println("WiFi forgotten. Restarting...");
+      delay(1000);
+      ESP.restart();
+    }
+    if (heldMs >= kWifiResetFeedbackDelayMs) {
+      const uint32_t remainingSeconds = (kWifiResetHoldMs - heldMs) / 1000 + 1;
+      if (remainingSeconds != lastRenderedSecond) {
+        lastRenderedSecond = remainingSeconds;
+        showWifiResetHint(remainingSeconds);
+      }
+    }
     delay(10);
   }
   delay(kSleepButtonDebounceMs);
 
-  gpio_hold_dis(static_cast<gpio_num_t>(board::kBacklight));
-  pinMode(board::kBacklight, OUTPUT);
-  digitalWrite(board::kBacklight, LOW);
-  gpio_hold_en(static_cast<gpio_num_t>(board::kBacklight));
-
-  esp_sleep_enable_ext0_wakeup(kSleepButton, LOW);
-  esp_deep_sleep_start();
+  enterDeepSleep();
 }
 
 void releaseTransfer() {
@@ -991,8 +1039,11 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
       if (length != 0) {
         sendNack(sequence, command, INVALID_PAYLOAD);
       } else {
-        wifiManager.clearCredentials();
+        // ACK before disconnecting: over the WiFi transport itself,
+        // clearCredentials()'s WiFi.disconnect() can sever the WebSocket,
+        // so the ACK must go out first or the request never resolves.
         sendAck(sequence, command);
+        wifiManager.clearCredentials();
       }
       return;
 
@@ -1000,8 +1051,9 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
       if (length != 1) {
         sendNack(sequence, command, INVALID_PAYLOAD);
       } else {
-        wifiManager.setEnabled(payload[0] != 0);
+        // Same ordering reason as CLEAR_WIFI_CREDENTIALS above.
         sendAck(sequence, command);
+        wifiManager.setEnabled(payload[0] != 0);
       }
       return;
 
