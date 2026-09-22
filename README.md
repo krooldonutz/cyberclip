@@ -127,7 +127,7 @@ Source GIF timing is preserved per frame at the format's 10 ms resolution unless
 
 Persisted images and GIFs survive reset and power loss. The board still needs power: disconnecting USB also turns the display off unless the ESP32 is powered from another suitable source.
 
-Press the board's **BOOT** button during normal operation to enter deep sleep and turn off the display. Press **BOOT** again to wake the board and resume persisted media. Deep sleep minimizes consumption but does not physically disconnect power. The **EN/RESET** button remains a hardware reset, and holding BOOT while resetting or connecting power still enters the ESP32 firmware-download mode.
+Press the board's **BOOT** button during normal operation to enter deep sleep and turn off the display. Press **BOOT** again to wake the board and resume persisted media. Deep sleep minimizes consumption but does not physically disconnect power. Holding BOOT for about 5 seconds instead forgets the board's WiFi pairing and restarts it into setup mode (see [Resetting a pairing](#resetting-a-pairing)) - a quick press-release is unaffected and still just sleeps the display. The **EN/RESET** button remains a hardware reset, and holding BOOT while resetting or connecting power still enters the ESP32 firmware-download mode.
 
 ## USB protocol
 
@@ -177,7 +177,11 @@ For the QR code to work, set `kAppBaseUrl` near the top of `firmware/matrix_disp
 
 This setup flow only runs automatically while the board has no saved WiFi credentials - once paired (by either method), it won't broadcast the setup network again unless you select **Forget WiFi**.
 
-In both cases, the pairing token gates the WiFi connection so other devices on your network cannot control the display or read its status without it. Firmware updates remain USB-only. Select **Forget WiFi** to have the board forget its network and pairing token; pair again afterward to issue a new one (for example, to pair a different browser with the same board, or to switch it to a different WiFi network).
+In both cases, the pairing token gates the WiFi connection so other devices on your network cannot control the display or read its status without it. Firmware updates remain USB-only. Select **Forget WiFi** (works whether you're connected over USB or WiFi) to have the board forget its network and pairing token; pair again afterward to issue a new one (for example, to pair a different browser with the same board, or to switch it to a different WiFi network).
+
+### Resetting a pairing
+
+If you're already connected (over either USB or WiFi), select **Forget WiFi** in the web app. If you have no connection at all - a lost pairing token, a board moved to a different network, no phone or computer handy - hold the board's **BOOT** button for about 5 seconds while it's awake. The screen counts down; releasing early does nothing different from a normal quick press (which still just puts the display to sleep, as before). Once the hold completes, the board forgets its WiFi network and restarts straight into phone-only setup mode (`Cyberclip-Setup-XXXX`).
 
 ## Troubleshooting
 
