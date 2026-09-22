@@ -113,6 +113,8 @@ void wsServerBegin() {
 
 void wsServerPoll() { ws.cleanupClients(); }
 
+AsyncWebServer &wsHttpServer() { return server; }
+
 bool wsReadByte(uint8_t *out) {
   bool hasByte = false;
   portENTER_CRITICAL(&rxMux);

@@ -6,10 +6,18 @@
 #include <driver/rtc_io.h>
 #include <esp_heap_caps.h>
 #include <esp_sleep.h>
+#include <qrcode.h>
 
 #include "protocol.h"
+#include "src/display_hooks.h"
+#include "src/setup_portal.h"
 #include "src/wifi_manager.h"
 #include "src/ws_server.h"
+
+namespace cyberclip {
+// See firmware/src/wifi_manager.h for what this configures.
+extern const char kAppBaseUrl[] = "";
+}  // namespace cyberclip
 
 namespace board {
 constexpr int kMosi = 23;
@@ -1097,6 +1105,54 @@ FrameParser serialParser;
 FrameParser wsParser;
 }  // namespace
 
+namespace cyberclip {
+
+void showWifiSetupQr(const char *url) {
+  constexpr uint8_t kQrVersion = 6;  // fits ~130 bytes at ECC_LOW; bump if kAppBaseUrl is long
+  QRCode qrcode;
+  uint8_t qrcodeData[qrcode_getBufferSize(kQrVersion)];
+  qrcode_initText(&qrcode, qrcodeData, kQrVersion, ECC_LOW, url);
+
+  display.setRotation(0);
+  display.fillScreen(TFT_WHITE);
+  const int16_t scale = max<int16_t>(
+      1, min(display.width(), display.height()) / (qrcode.size + 2));
+  const int16_t originX = (display.width() - qrcode.size * scale) / 2;
+  const int16_t originY = (display.height() - qrcode.size * scale) / 2;
+  display.startWrite();
+  for (uint8_t y = 0; y < qrcode.size; ++y) {
+    for (uint8_t x = 0; x < qrcode.size; ++x) {
+      const uint16_t color =
+          qrcode_getModule(&qrcode, x, y) ? TFT_BLACK : TFT_WHITE;
+      display.fillRect(originX + x * scale, originY + y * scale, scale,
+                       scale, color);
+    }
+  }
+  display.endWrite();
+}
+
+void showWifiSetupInfo(const char *ip, const char *hostname) {
+  display.setRotation(0);
+  display.fillScreen(TFT_BLACK);
+  display.setTextColor(TFT_WHITE, TFT_BLACK);
+  display.setTextSize(1);
+  display.setCursor(10, 70);
+  display.println("WiFi connected");
+  display.setCursor(10, 100);
+  display.println("Open the Cyberclip app and");
+  display.setCursor(10, 120);
+  display.println("connect over WiFi to:");
+  display.setCursor(10, 150);
+  display.setTextSize(2);
+  display.print(ip);
+  display.setTextSize(1);
+  display.setCursor(10, 190);
+  display.print(hostname);
+  display.print(".local");
+}
+
+}  // namespace cyberclip
+
 void setup() {
   Serial.setRxBufferSize(8192);
   Serial.begin(kSerialBaud);
@@ -1113,6 +1169,7 @@ void setup() {
   if (filesystemMounted && loadActiveMetadata()) startStoredPlayback();
 
   wifiManager.begin();
+  if (!wifiManager.hasCredentials()) setupPortalBegin();
 }
 
 void loop() {
@@ -1131,6 +1188,7 @@ void loop() {
 
   wifiManager.poll();
   wsServerPoll();
+  setupPortalPoll();
   advanceStoredPlayback();
   pollSleepButton();
   yield();

@@ -153,14 +153,31 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) and `firmware/protocol.h` for the complet
 
 ## WiFi control
 
-WiFi is an additional, optional transport alongside USB - USB keeps working exactly as before. It is strictly local-network: the board joins your own WiFi and the browser talks to it directly at its local IP, with no cloud relay, no external server, and no background access.
+WiFi is an additional, optional transport alongside USB - USB keeps working exactly as before. It is strictly local-network: the board joins your own WiFi and the browser talks to it directly at its local IP, with no cloud relay, no external server, and no background access. There are two ways to provision WiFi credentials, depending on whether you have USB/computer access:
+
+### Pairing over USB
 
 1. Connect over USB first, as above.
 2. Select **Set up WiFi**, and enter your network's name (SSID) and password. The web app sends these to the board over the existing USB connection.
 3. The board joins your network and reports its local IP address (and an `<name>.local` hostname) back over USB. On the very first pairing, it also issues a random 16-byte pairing token, which the web app stores in this browser only.
 4. Enter that IP address (or hostname) under **Connect over WiFi** and select **Connect over WiFi**. From then on, image/GIF upload, playlists, brightness, and clear/status all work the same way as over USB.
 
-The pairing token gates the WiFi connection so other devices on your network cannot control the display or read its status without it. Firmware updates remain USB-only. Select **Forget WiFi** to have the board forget its network and pairing token; set up WiFi again afterward to issue a new one (for example, to pair a different browser with the same board).
+### Phone-only setup (no computer or USB cable)
+
+If the board is already flashed with Cyberclip firmware and has never been paired before, it needs no computer at all:
+
+1. Power the board on. Since it has no stored WiFi credentials, it broadcasts its own temporary, open WiFi network named `Cyberclip-Setup-XXXX` (the suffix is unique per board).
+2. On your phone, join that network. Most phones detect it as a captive portal and open its setup page automatically; if not, open a browser and go to `192.168.4.1`.
+3. Enter your home WiFi's name and password and submit. Keep the page open - it shows "Connecting..." and then either "Connected!" or "Could not connect" (with a link back to try again, without needing to rejoin the setup network).
+4. Once connected, the setup network disappears. Look at the board's own screen:
+   - If [`kAppBaseUrl`](firmware/matrix_display.ino) has been configured (see below), it shows a **QR code**. Switch your phone back to its normal WiFi or mobile data, then scan it - it opens the Cyberclip web app already pointed at this board, ready to connect with one tap.
+   - Otherwise, it shows the board's new IP address as plain text. Open the Cyberclip web app yourself, enter that address under **Connect over WiFi**, and select **Connect over WiFi**.
+
+For the QR code to work, set `kAppBaseUrl` near the top of `firmware/matrix_display.ino` to wherever you deployed the web app (see [Local development](#local-development)), e.g. `"https://your-cyberclip-deployment.example/"`, then rebuild and reflash. Leave it as `""` to always show the plain-IP fallback instead.
+
+This setup flow only runs automatically while the board has no saved WiFi credentials - once paired (by either method), it won't broadcast the setup network again unless you select **Forget WiFi**.
+
+In both cases, the pairing token gates the WiFi connection so other devices on your network cannot control the display or read its status without it. Firmware updates remain USB-only. Select **Forget WiFi** to have the board forget its network and pairing token; pair again afterward to issue a new one (for example, to pair a different browser with the same board, or to switch it to a different WiFi network).
 
 ## Troubleshooting
 
@@ -223,5 +240,7 @@ firmware/
   src/
     wifi_manager.h/.cpp   WiFi credentials, pairing token, connection lifecycle
     ws_server.h/.cpp      WebSocket transport carrying the same binary protocol
+    setup_portal.h/.cpp   Phone-only SoftAP + captive portal WiFi provisioning
+    display_hooks.h       QR code / plain-IP handoff shown on the board's screen
   test/
 ```
