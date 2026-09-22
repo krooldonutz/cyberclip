@@ -1,8 +1,8 @@
 # Cyberclip
 
-Cyberclip is a VIA-style web controller for the **ideaspark ESP32 development board with an integrated 1.9-inch 170×320 ST7789 TFT**. It processes images and GIFs in the browser, compresses each display frame as JPEG, and sends it directly to the board over USB with the Web Serial API.
+Cyberclip is a VIA-style web controller for the **ideaspark ESP32 development board with an integrated 1.9-inch 170×320 ST7789 TFT**. It processes images and GIFs in the browser, compresses each display frame as JPEG, and sends it directly to the board over USB with the Web Serial API, or over your own local WiFi network.
 
-There is no application server, Python CLI, cloud relay, Wi-Fi transfer, or Bluetooth pairing. The ESP32 receives validated frames, decodes them, and draws them to its display. When **Keep media on device** is enabled, it also stores the image or GIF in flash and resumes it without a USB data connection.
+There is no application server, Python CLI, cloud relay, or Bluetooth pairing. WiFi is optional and strictly local-network: the board joins your own WiFi and the browser talks to it directly at its local IP address, with no cloud relay or external backend involved. WiFi credentials and a local pairing token are provisioned once over USB (see [WiFi control](#wifi-control) below); after that, control and media upload work the same way whether you're connected by cable or over WiFi. Firmware flashing remains USB-only. The ESP32 receives validated frames, decodes them, and draws them to its display. When **Keep media on device** is enabled, it also stores the image or GIF in flash and resumes it without a USB data connection.
 
 ## Supported hardware
 
@@ -36,7 +36,7 @@ Chrome / Edge PWA
   - preview and JPEG encode
   - schedule GIF frames
     │
-    │ Web Serial at 921600 baud
+    │ Web Serial at 921600 baud, or a local WebSocket over WiFi
     ▼
 ESP32 firmware
   - validate framed packets and CRC
@@ -151,6 +151,17 @@ The handshake reports:
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) and `firmware/protocol.h` for the complete command/error definitions.
 
+## WiFi control
+
+WiFi is an additional, optional transport alongside USB - USB keeps working exactly as before. It is strictly local-network: the board joins your own WiFi and the browser talks to it directly at its local IP, with no cloud relay, no external server, and no background access.
+
+1. Connect over USB first, as above.
+2. Select **Set up WiFi**, and enter your network's name (SSID) and password. The web app sends these to the board over the existing USB connection.
+3. The board joins your network and reports its local IP address (and an `<name>.local` hostname) back over USB. On the very first pairing, it also issues a random 16-byte pairing token, which the web app stores in this browser only.
+4. Enter that IP address (or hostname) under **Connect over WiFi** and select **Connect over WiFi**. From then on, image/GIF upload, playlists, brightness, and clear/status all work the same way as over USB.
+
+The pairing token gates the WiFi connection so other devices on your network cannot control the display or read its status without it. Firmware updates remain USB-only. Select **Forget WiFi** to have the board forget its network and pairing token; set up WiFi again afterward to issue a new one (for example, to pair a different browser with the same board).
+
 ## Troubleshooting
 
 ### No serial device appears
@@ -197,6 +208,7 @@ Reconnect the board, press **Connect**, and approve the port again if prompted. 
 src/
   app.js             Browser state and UI
   serial.js          Web Serial lifecycle
+  wifiTransport.js   WebSocket lifecycle (mirrors serial.js) for WiFi control
   protocol.js        Framing, CRC, commands, payload helpers
   images.js          Resize, fit, preview, JPEG encoding
   gifs.js            GIF validation, compositing, timing
@@ -208,5 +220,8 @@ firmware/
   matrix_display.ino
   protocol.h
   platformio.ini
+  src/
+    wifi_manager.h/.cpp   WiFi credentials, pairing token, connection lifecycle
+    ws_server.h/.cpp      WebSocket transport carrying the same binary protocol
   test/
 ```

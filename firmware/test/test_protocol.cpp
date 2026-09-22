@@ -51,12 +51,24 @@ void test_protocol_v2_playlist_metadata_integrity() {
   TEST_ASSERT_FALSE(validatePlaylistMetadata(metadata, sizeof(metadata)));
 }
 
+void test_wifi_command_bytes_do_not_collide() {
+  TEST_ASSERT_EQUAL_HEX8(0x40, SET_WIFI_CREDENTIALS);
+  TEST_ASSERT_EQUAL_HEX8(0x41, GET_WIFI_STATUS);
+  TEST_ASSERT_EQUAL_HEX8(0x42, CLEAR_WIFI_CREDENTIALS);
+  TEST_ASSERT_EQUAL_HEX8(0x43, SET_WIFI_ENABLED);
+  TEST_ASSERT_EQUAL_HEX8(0xA3, WIFI_STATUS_RESPONSE);
+  TEST_ASSERT_EQUAL_UINT8(16, kWifiTokenSize);
+  TEST_ASSERT_EQUAL_UINT8(32, kWifiMaxSsidLength);
+  TEST_ASSERT_EQUAL_UINT8(64, kWifiMaxPasswordLength);
+}
+
 void runTests() {
   UNITY_BEGIN();
   RUN_TEST(test_crc_standard_vector);
   RUN_TEST(test_little_endian_helpers);
   RUN_TEST(test_upload_progress_pixels);
   RUN_TEST(test_protocol_v2_playlist_metadata_integrity);
+  RUN_TEST(test_wifi_command_bytes_do_not_collide);
   UNITY_END();
 }
 

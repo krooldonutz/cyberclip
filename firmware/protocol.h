@@ -17,6 +17,14 @@ constexpr uint8_t kPlaylistMetadataVersion = 2;
 constexpr size_t kPlaylistMetadataHeaderSize = 10;
 constexpr size_t kPlaylistMetadataCrcSize = 2;
 
+// WiFi is an additional, optional, local-network-only transport alongside
+// USB serial (see firmware/src/wifi_manager.h and firmware/src/ws_server.h).
+// Credentials are provisioned once over USB; the pairing token this issues
+// gates the WebSocket control transport.
+constexpr size_t kWifiTokenSize = 16;
+constexpr size_t kWifiMaxSsidLength = 32;
+constexpr size_t kWifiMaxPasswordLength = 64;
+
 enum Command : uint8_t {
   HELLO = 0x01,
   // BEGIN_FRAME is 12 bytes for streaming. During playlist staging it appends
@@ -33,10 +41,27 @@ enum Command : uint8_t {
   END_PLAYLIST = 0x31,
   PLAY_STORED = 0x32,
   CLEAR_STORED = 0x33,
+  // SET_WIFI_CREDENTIALS: ssidLength u8, ssid bytes, passwordLength u8,
+  // password bytes. Sent over USB during one-time pairing.
+  SET_WIFI_CREDENTIALS = 0x40,
+  GET_WIFI_STATUS = 0x41,
+  CLEAR_WIFI_CREDENTIALS = 0x42,
+  SET_WIFI_ENABLED = 0x43,
   HELLO_RESPONSE = 0x81,
   STATUS_RESPONSE = 0xA2,
+  // WIFI_STATUS_RESPONSE: state u8, ipv4 4 bytes, hostnameLength u8,
+  // hostname bytes, tokenIncluded u8, token 16 bytes (only when
+  // tokenIncluded is 1, i.e. immediately after a first SET_WIFI_CREDENTIALS).
+  WIFI_STATUS_RESPONSE = 0xA3,
   ACK = 0xF0,
   NACK = 0xF1,
+};
+
+enum WifiState : uint8_t {
+  WIFI_OFF = 0,
+  WIFI_CONNECTING = 1,
+  WIFI_CONNECTED = 2,
+  WIFI_FAILED = 3,
 };
 
 enum MediaType : uint8_t {

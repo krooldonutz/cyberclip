@@ -32,7 +32,7 @@
             <h2>ideaspark ST7789</h2>
           </div>
           <div class="button-row">
-            <button id="connect-button" class="button button-primary">Connect</button>
+            <button id="connect-button" class="button button-primary">Connect via USB</button>
             <button id="flash-button" class="button button-secondary">Install firmware</button>
             <button id="disconnect-button" class="button button-danger" disabled>Disconnect</button>
           </div>
@@ -45,9 +45,32 @@
         <div id="device-details" class="device-details" aria-live="polite">
           <div><span>Display</span><strong id="device-resolution">170 × 320</strong></div>
           <div><span>Firmware</span><strong id="device-firmware">Not connected</strong></div>
-          <div><span>Transport</span><strong>USB · 921600 baud</strong></div>
+          <div><span>Transport</span><strong id="device-transport">USB · 921600 baud</strong></div>
           <div><span>Codec</span><strong id="device-codec">JPEG</strong></div>
           <div><span>Storage</span><strong id="device-storage">Not connected</strong></div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Local network</p>
+            <h2>Connect over WiFi</h2>
+          </div>
+        </div>
+        <p class="device-help">
+          Pair over USB once with <strong>Set up WiFi</strong> to give the device your network's SSID/password and issue it a local pairing token. After that, control and media upload also work wirelessly on your own LAN &mdash; there is no cloud relay.
+        </p>
+        <div class="button-row">
+          <button id="setup-wifi-button" class="button button-secondary" disabled>Set up WiFi</button>
+          <button id="forget-wifi-button" class="button button-quiet" disabled>Forget WiFi</button>
+        </div>
+        <label>
+          Device IP or hostname
+          <input id="wifi-host-input" type="text" placeholder="192.168.1.42 or cyberclip.local">
+        </label>
+        <div class="button-row">
+          <button id="connect-wifi-button" class="button button-primary">Connect over WiFi</button>
         </div>
       </section>
 

@@ -8,6 +8,8 @@
 #include <esp_sleep.h>
 
 #include "protocol.h"
+#include "src/wifi_manager.h"
+#include "src/ws_server.h"
 
 namespace board {
 constexpr int kMosi = 23;
@@ -157,6 +159,13 @@ bool renderToDisplay = false;
 bool filesystemMounted = false;
 bool sleepButtonArmed = false;
 
+// Selects where writeFrame() sends its next reply. Set immediately before
+// feeding bytes into serialParser/wsParser in loop(), so it is always
+// correct for the synchronous sendAck/sendNack/sendHello/sendStatus calls
+// that happen while handling that byte.
+enum class ReplyTarget { kSerial, kWebSocket };
+ReplyTarget currentReplyTarget = ReplyTarget::kSerial;
+
 bool startStoredPlayback();
 
 void showUploadProgress(uint8_t rotation) {
@@ -289,9 +298,19 @@ void writeFrame(uint8_t command, uint16_t sequence, const uint8_t *payload,
   }
   const uint8_t trailer[2] = {
       static_cast<uint8_t>(crc), static_cast<uint8_t>(crc >> 8)};
-  Serial.write(header, sizeof(header));
-  if (payloadLength) Serial.write(payload, payloadLength);
-  Serial.write(trailer, sizeof(trailer));
+
+  if (currentReplyTarget == ReplyTarget::kSerial) {
+    Serial.write(header, sizeof(header));
+    if (payloadLength) Serial.write(payload, payloadLength);
+    Serial.write(trailer, sizeof(trailer));
+    return;
+  }
+
+  static uint8_t wsFrame[sizeof(header) + kMaxWirePayload + sizeof(trailer)];
+  memcpy(wsFrame, header, sizeof(header));
+  if (payloadLength) memcpy(wsFrame + sizeof(header), payload, payloadLength);
+  memcpy(wsFrame + sizeof(header) + payloadLength, trailer, sizeof(trailer));
+  wsSendFrame(wsFrame, sizeof(header) + payloadLength + sizeof(trailer));
 }
 
 void sendAck(uint16_t sequence, uint8_t requestCommand) {
@@ -569,6 +588,27 @@ void sendStatus(uint16_t sequence) {
   writeLe32(payload + 8, transfer.total);
   writeLe32(payload + 12, ESP.getFreeHeap());
   writeFrame(STATUS_RESPONSE, sequence, payload, sizeof(payload));
+}
+
+void sendWifiStatus(uint16_t sequence, bool tokenIncluded,
+                    const uint8_t *token) {
+  const WifiStatus wifiStatus = wifiManager.status();
+  const size_t hostnameLength = strlen(wifiStatus.hostname);
+  uint8_t payload[1 + 4 + 1 + sizeof(wifiStatus.hostname) - 1 + 1 +
+                  kWifiTokenSize];
+  size_t offset = 0;
+  payload[offset++] = wifiStatus.state;
+  memcpy(payload + offset, wifiStatus.ip, sizeof(wifiStatus.ip));
+  offset += sizeof(wifiStatus.ip);
+  payload[offset++] = static_cast<uint8_t>(hostnameLength);
+  memcpy(payload + offset, wifiStatus.hostname, hostnameLength);
+  offset += hostnameLength;
+  payload[offset++] = tokenIncluded ? 1 : 0;
+  if (tokenIncluded && token) {
+    memcpy(payload + offset, token, kWifiTokenSize);
+    offset += kWifiTokenSize;
+  }
+  writeFrame(WIFI_STATUS_RESPONSE, sequence, payload, offset);
 }
 
 bool persistTransferFrame() {
@@ -903,6 +943,60 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
       }
       return;
 
+    case SET_WIFI_CREDENTIALS: {
+      if (length < 2) {
+        sendNack(sequence, command, INVALID_PAYLOAD);
+        return;
+      }
+      const uint8_t ssidLength = payload[0];
+      if (ssidLength == 0 || ssidLength > kWifiMaxSsidLength ||
+          length < static_cast<uint32_t>(1 + ssidLength + 1)) {
+        sendNack(sequence, command, INVALID_PAYLOAD);
+        return;
+      }
+      const uint8_t passwordLength = payload[1 + ssidLength];
+      if (passwordLength > kWifiMaxPasswordLength ||
+          length != static_cast<uint32_t>(1 + ssidLength + 1 + passwordLength)) {
+        sendNack(sequence, command, INVALID_PAYLOAD);
+        return;
+      }
+      char ssid[kWifiMaxSsidLength + 1] = {};
+      char password[kWifiMaxPasswordLength + 1] = {};
+      memcpy(ssid, payload + 1, ssidLength);
+      memcpy(password, payload + 1 + ssidLength + 1, passwordLength);
+      uint8_t token[kWifiTokenSize];
+      bool tokenIncluded = false;
+      if (!wifiManager.setCredentials(ssid, password, token, &tokenIncluded)) {
+        sendNack(sequence, command, INVALID_PAYLOAD);
+        return;
+      }
+      sendWifiStatus(sequence, tokenIncluded, token);
+      return;
+    }
+
+    case GET_WIFI_STATUS:
+      if (length != 0) sendNack(sequence, command, INVALID_PAYLOAD);
+      else sendWifiStatus(sequence, false, nullptr);
+      return;
+
+    case CLEAR_WIFI_CREDENTIALS:
+      if (length != 0) {
+        sendNack(sequence, command, INVALID_PAYLOAD);
+      } else {
+        wifiManager.clearCredentials();
+        sendAck(sequence, command);
+      }
+      return;
+
+    case SET_WIFI_ENABLED:
+      if (length != 1) {
+        sendNack(sequence, command, INVALID_PAYLOAD);
+      } else {
+        wifiManager.setEnabled(payload[0] != 0);
+        sendAck(sequence, command);
+      }
+      return;
+
     default:
       sendNack(sequence, command, UNSUPPORTED_COMMAND);
   }
@@ -997,7 +1091,10 @@ class FrameParser {
   uint16_t receivedCrc_ = 0;
   uint8_t version_ = 0;
   uint8_t command_ = 0;
-} parser;
+};
+
+FrameParser serialParser;
+FrameParser wsParser;
 }  // namespace
 
 void setup() {
@@ -1014,13 +1111,26 @@ void setup() {
   filesystemMounted = LittleFS.begin(false);
   if (!filesystemMounted) filesystemMounted = LittleFS.begin(true);
   if (filesystemMounted && loadActiveMetadata()) startStoredPlayback();
+
+  wifiManager.begin();
 }
 
 void loop() {
+  currentReplyTarget = ReplyTarget::kSerial;
   while (Serial.available() > 0) {
-    parser.feed(static_cast<uint8_t>(Serial.read()));
+    serialParser.feed(static_cast<uint8_t>(Serial.read()));
   }
-  parser.pollTimeout();
+  serialParser.pollTimeout();
+
+  currentReplyTarget = ReplyTarget::kWebSocket;
+  uint8_t wsByte;
+  while (wsReadByte(&wsByte)) {
+    wsParser.feed(wsByte);
+  }
+  wsParser.pollTimeout();
+
+  wifiManager.poll();
+  wsServerPoll();
   advanceStoredPlayback();
   pollSleepButton();
   yield();
