@@ -1113,7 +1113,6 @@ void setup() {
   if (filesystemMounted && loadActiveMetadata()) startStoredPlayback();
 
   wifiManager.begin();
-  wsServerBegin();
 }
 
 void loop() {

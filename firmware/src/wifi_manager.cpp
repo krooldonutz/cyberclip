@@ -5,6 +5,8 @@
 #include <esp_random.h>
 #include <string.h>
 
+#include "ws_server.h"
+
 namespace cyberclip {
 
 namespace {
@@ -17,8 +19,11 @@ WifiManager wifiManager;
 
 void WifiManager::begin() {
   loadFromPreferences();
-  WiFi.mode(WIFI_OFF);
-  WiFi.setHostname(status_.hostname);
+  // Deliberately leave WiFi/LWIP untouched here: WiFi.mode(WIFI_OFF) does
+  // not bring up LWIP's tcpip task, and starting the WebSocket server (see
+  // connectIfNeeded()) before that task exists crashes with a lwIP
+  // "Invalid mbox" assertion. USB-only users who never provision WiFi
+  // never touch the network stack at all this way.
   if (enabled_ && hasCredentials_) connectIfNeeded();
 }
 
@@ -85,7 +90,10 @@ void WifiManager::clearCredentials() {
   password_[0] = '\0';
   hasCredentials_ = false;
   enabled_ = false;
-  WiFi.disconnect(/*wifioff=*/true);
+  // wifioff=false: drop the AP association without tearing down LWIP's
+  // netif/tcpip task, which the WebSocket server may already depend on
+  // (see connectIfNeeded() / wsServerBegin()).
+  WiFi.disconnect(/*wifioff=*/false);
   status_.state = WIFI_OFF;
   status_.ip[0] = status_.ip[1] = status_.ip[2] = status_.ip[3] = 0;
 
@@ -109,8 +117,9 @@ void WifiManager::setEnabled(bool enabled) {
     lastAttemptAt_ = 0;
     connectIfNeeded();
   } else {
-    WiFi.disconnect(/*wifioff=*/true);
-    WiFi.mode(WIFI_OFF);
+    // wifioff=false: see clearCredentials() for why WiFi.mode(WIFI_OFF)
+    // is avoided once the WebSocket server may have started.
+    WiFi.disconnect(/*wifioff=*/false);
     status_.state = WIFI_OFF;
     status_.ip[0] = status_.ip[1] = status_.ip[2] = status_.ip[3] = 0;
   }
@@ -124,6 +133,10 @@ void WifiManager::connectIfNeeded() {
   status_.state = WIFI_CONNECTING;
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(status_.hostname);
+  // Only safe to start once WiFi.mode(WIFI_STA) has brought up LWIP's
+  // tcpip task; wsServerBegin() is idempotent, so repeated reconnect
+  // attempts are harmless.
+  wsServerBegin();
   WiFi.begin(ssid_, password_);
 }
 

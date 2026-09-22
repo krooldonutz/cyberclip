@@ -15,6 +15,13 @@ namespace cyberclip {
 // loop to feed into a FrameParser, exactly like bytes read from Serial.
 // This keeps all protocol parsing/handling on the single main-loop task,
 // since AsyncWebServer's callbacks run on a different task.
+//
+// wsServerBegin() must only be called after WiFi.mode(WIFI_STA) - starting
+// the underlying TCP listener before LWIP's tcpip task exists (i.e. while
+// WiFi is still off) crashes with a lwIP "Invalid mbox" assertion. It is
+// idempotent, so WifiManager::connectIfNeeded() (its only caller) can call
+// it on every reconnect attempt. wsServerPoll()/wsReadByte() are always
+// safe to call, even before the server has started.
 void wsServerBegin();
 void wsServerPoll();
 

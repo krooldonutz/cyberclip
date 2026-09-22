@@ -52,7 +52,7 @@ Only `serial.js` and `wifiTransport.js` own their respective transport's connect
 
 `firmware/src/wifi_manager.h/.cpp` stores WiFi credentials and the local pairing token in NVS (via `Preferences`) and owns the station connection lifecycle. WiFi stays off until credentials are provisioned over USB, so a USB-only setup never pays for an idle radio.
 
-`firmware/src/ws_server.h/.cpp` runs a WebSocket endpoint (`ESPAsyncWebServer`/`AsyncWebSocket`) that carries the same framed packets as USB serial. It accepts one client at a time; a client's first message must be its 16-byte pairing token, after which its later messages are queued and drained on the main loop task - exactly like bytes read from `Serial` - so all protocol handling still runs on a single thread even though the WebSocket library's own callbacks run elsewhere.
+`firmware/src/ws_server.h/.cpp` runs a WebSocket endpoint (`ESPAsyncWebServer`/`AsyncWebSocket`) that carries the same framed packets as USB serial. It accepts one client at a time; a client's first message must be its 16-byte pairing token, after which its later messages are queued and drained on the main loop task - exactly like bytes read from `Serial` - so all protocol handling still runs on a single thread even though the WebSocket library's own callbacks run elsewhere. It only starts once `WiFi.mode(WIFI_STA)` has actually been set (from `WifiManager::connectIfNeeded()`) - starting it any earlier crashes with a lwIP "Invalid mbox" assertion, since the underlying TCP listener needs LWIP's tcpip task already running. A USB-only device that never provisions WiFi never touches the network stack at all.
 
 ## Protocol framing
 

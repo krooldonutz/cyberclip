@@ -97,6 +97,15 @@ void handleWsEvent(AsyncWebSocket *, AsyncWebSocketClient *client,
 }  // namespace
 
 void wsServerBegin() {
+  // Safe to call every time WiFi comes up (including reconnect attempts):
+  // starting the underlying TCP listener before LWIP's tcpip task exists
+  // (i.e. while WiFi is still in mode WIFI_OFF) crashes with "Invalid mbox",
+  // so this must only run once WiFi.mode(WIFI_STA) has been set - see
+  // WifiManager::connectIfNeeded(), the only caller.
+  static bool started = false;
+  if (started) return;
+  started = true;
+
   ws.onEvent(handleWsEvent);
   server.addHandler(&ws);
   server.begin();
