@@ -17,10 +17,24 @@ export const Command = Object.freeze({
   END_PLAYLIST: 0x31,
   PLAY_STORED: 0x32,
   CLEAR_STORED: 0x33,
+  SET_WIFI_CREDENTIALS: 0x40,
+  GET_WIFI_STATUS: 0x41,
+  CLEAR_WIFI_CREDENTIALS: 0x42,
+  SET_WIFI_ENABLED: 0x43,
   HELLO_RESPONSE: 0x81,
   STATUS_RESPONSE: 0xa2,
+  WIFI_STATUS_RESPONSE: 0xa3,
   ACK: 0xf0,
   NACK: 0xf1,
+});
+
+export const WIFI_TOKEN_SIZE = 16;
+
+export const WifiState = Object.freeze({
+  OFF: 0,
+  CONNECTING: 1,
+  CONNECTED: 2,
+  FAILED: 3,
 });
 
 export const ErrorCode = Object.freeze({
@@ -241,6 +255,40 @@ export function createClearPayload(rgb565 = 0) {
   const payload = new Uint8Array(2);
   new DataView(payload.buffer).setUint16(0, rgb565, true);
   return payload;
+}
+
+export function createWifiCredentialsPayload({ ssid, password }) {
+  const ssidBytes = new TextEncoder().encode(ssid);
+  const passwordBytes = new TextEncoder().encode(password ?? '');
+  if (ssidBytes.byteLength === 0 || ssidBytes.byteLength > 32) {
+    throw new ProtocolError('WiFi network name must be 1-32 bytes');
+  }
+  if (passwordBytes.byteLength > 64) {
+    throw new ProtocolError('WiFi password must be at most 64 bytes');
+  }
+  const payload = new Uint8Array(1 + ssidBytes.byteLength + 1 + passwordBytes.byteLength);
+  payload[0] = ssidBytes.byteLength;
+  payload.set(ssidBytes, 1);
+  payload[1 + ssidBytes.byteLength] = passwordBytes.byteLength;
+  payload.set(passwordBytes, 1 + ssidBytes.byteLength + 1);
+  return payload;
+}
+
+export function parseWifiStatusResponse(payload) {
+  if (payload.byteLength < 6) {
+    throw new ProtocolError('Device returned an incomplete WiFi status response');
+  }
+  const view = viewOf(payload);
+  const state = view.getUint8(0);
+  const ip = Array.from(payload.subarray(1, 5)).join('.');
+  const hostnameLength = view.getUint8(5);
+  const hostname = new TextDecoder().decode(payload.subarray(6, 6 + hostnameLength));
+  const tokenOffset = 6 + hostnameLength;
+  const tokenIncluded = payload.at(tokenOffset) === 1;
+  const token = tokenIncluded
+    ? payload.slice(tokenOffset + 1, tokenOffset + 1 + WIFI_TOKEN_SIZE)
+    : null;
+  return { state, connected: state === WifiState.CONNECTED, ip, hostname, token };
 }
 
 function asUint8Array(value) {

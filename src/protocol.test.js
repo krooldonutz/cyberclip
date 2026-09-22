@@ -3,11 +3,14 @@ import {
   Command,
   PacketDecoder,
   PROTOCOL_VERSION,
+  WifiState,
   createBeginFramePayload,
   createBeginPlaylistPayload,
+  createWifiCredentialsPayload,
   crc16Ccitt,
   encodePacket,
   parseHelloResponse,
+  parseWifiStatusResponse,
 } from './protocol.js';
 
 describe('protocol framing', () => {
@@ -120,5 +123,60 @@ describe('persistent media payloads', () => {
       loop: true,
       rotation: 1,
     })).toEqual(Uint8Array.of(2, 105, 0, 1, 1));
+  });
+});
+
+describe('WiFi payloads', () => {
+  it('length-prefixes the SSID and password', () => {
+    const payload = createWifiCredentialsPayload({ ssid: 'Home', password: 'sw0rdfish' });
+    expect(payload).toEqual(Uint8Array.of(
+      4, ...new TextEncoder().encode('Home'),
+      9, ...new TextEncoder().encode('sw0rdfish'),
+    ));
+  });
+
+  it('accepts an empty password for open networks', () => {
+    expect(createWifiCredentialsPayload({ ssid: 'Home', password: '' })).toEqual(
+      Uint8Array.of(4, ...new TextEncoder().encode('Home'), 0),
+    );
+  });
+
+  it('rejects an empty or oversized SSID', () => {
+    expect(() => createWifiCredentialsPayload({ ssid: '', password: '' })).toThrow();
+    expect(() => createWifiCredentialsPayload({ ssid: 'x'.repeat(33), password: '' })).toThrow();
+  });
+
+  it('parses connection state, IP, hostname, and an optional token', () => {
+    const hostname = new TextEncoder().encode('cyberclip');
+    const token = Uint8Array.from({ length: 16 }, (_, i) => i);
+    const payload = new Uint8Array([
+      WifiState.CONNECTED, 192, 168, 1, 42,
+      hostname.length, ...hostname,
+      1, ...token,
+    ]);
+
+    expect(parseWifiStatusResponse(payload)).toMatchObject({
+      state: WifiState.CONNECTED,
+      connected: true,
+      ip: '192.168.1.42',
+      hostname: 'cyberclip',
+    });
+    expect(parseWifiStatusResponse(payload).token).toEqual(token);
+  });
+
+  it('omits the token when the device did not include one', () => {
+    const hostname = new TextEncoder().encode('cyberclip');
+    const payload = new Uint8Array([
+      WifiState.CONNECTING, 0, 0, 0, 0,
+      hostname.length, ...hostname,
+      0,
+    ]);
+
+    expect(parseWifiStatusResponse(payload)).toMatchObject({
+      state: WifiState.CONNECTING,
+      connected: false,
+      ip: '0.0.0.0',
+      token: null,
+    });
   });
 });
