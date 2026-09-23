@@ -129,7 +129,10 @@ function initialize() {
   const lastHost = localStorage.getItem(WIFI_LAST_HOST_KEY);
   if (lastHost) elements['wifi-host-input'].value = lastHost;
 
-  applyWifiHandoffFromUrl();
+  if (!applyWifiHandoffFromUrl() && lastHost && loadWifiPairing(lastHost)?.token) {
+    log(`Reconnecting to ${lastHost} over WiFi...`);
+    void connectWifi();
+  }
 
   if (import.meta.env.PROD && 'serviceWorker' in navigator && globalThis.isSecureContext) {
     navigator.serviceWorker.register('/service-worker.js').catch((error) => {
@@ -255,12 +258,13 @@ function applyWifiHandoffFromUrl() {
   const params = new URLSearchParams(window.location.search);
   const host = params.get('host');
   const token = params.get('token')?.toLowerCase();
-  if (!host || !/^[0-9a-f]{32}$/.test(token ?? '')) return;
+  if (!host || !/^[0-9a-f]{32}$/.test(token ?? '')) return false;
 
   history.replaceState(null, '', window.location.pathname);
   saveWifiPairing(host, token);
   log(`Scanned WiFi setup for ${host}, connecting...`);
   void connectWifi();
+  return true;
 }
 
 async function connectWifi() {
@@ -324,8 +328,9 @@ async function setupWifi() {
 
     const host = `${wifiStatus.hostname}.local`;
     saveWifiPairing(host, token);
-    log(`WiFi ready at ${host} (try the IP ${wifiStatus.ip} instead if that doesn't resolve). Use "Connect over WiFi" from here on.`);
+    log(`WiFi ready at ${host} (try the IP ${wifiStatus.ip} instead if that doesn't resolve). Switching to it now...`);
     setProgress(100, 'WiFi ready');
+    await connectWifi();
   } catch (error) {
     log(`WiFi setup failed: ${error.message}`, 'error');
     setProgress(0, 'Ready');
