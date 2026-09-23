@@ -59,8 +59,11 @@
           </div>
         </div>
         <p class="device-help">
-          Pair over USB once with <strong>Set up WiFi</strong> to give the device your network's SSID/password and issue it a local pairing token. After that, control and media upload also work wirelessly on your own LAN &mdash; there is no cloud relay.
+          No computer needed: power on an unpaired board and it broadcasts its own WiFi network for phone-only setup &mdash; join it, pick your network from the list it finds, and the board takes it from there. Have a computer handy instead? Pair once over USB with <strong>Set up WiFi</strong> below. Either way, control and media upload then also work wirelessly on your own LAN &mdash; there is no cloud relay.
         </p>
+        <div id="wifi-first-time-hint" class="notice notice-info" hidden>
+          Just finished phone-only setup? Scan the QR code on your board's screen to connect automatically. Otherwise, pair over USB with <strong>Set up WiFi</strong> below, or enter the device's address manually if you already know it.
+        </div>
         <div class="button-row">
           <button id="setup-wifi-button" class="button button-secondary" disabled>Set up WiFi</button>
           <button id="forget-wifi-button" class="button button-quiet" disabled>Forget WiFi</button>

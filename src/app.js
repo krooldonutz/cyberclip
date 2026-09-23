@@ -37,6 +37,7 @@ const elements = Object.fromEntries([
   'setup-wifi-button',
   'forget-wifi-button',
   'wifi-host-input',
+  'wifi-first-time-hint',
   'disconnect-button',
   'flash-button',
   'support-message',
@@ -133,6 +134,7 @@ function initialize() {
     log(`Reconnecting to ${lastHost} over WiFi...`);
     void connectWifi();
   }
+  updateWifiFirstTimeHint();
 
   if (import.meta.env.PROD && 'serviceWorker' in navigator && globalThis.isSecureContext) {
     navigator.serviceWorker.register('/service-worker.js').catch((error) => {
@@ -654,6 +656,8 @@ function setState(nextState) {
   const online = connected && !['disconnecting', 'disconnected'].includes(nextState);
   elements['connection-pill'].className = `pill ${online ? 'pill-online' : 'pill-offline'}`;
   elements['connection-pill'].textContent = stateLabel(nextState);
+
+  updateWifiFirstTimeHint();
 }
 
 function updateDeviceDetails() {
@@ -749,6 +753,12 @@ function restorePreferences() {
   } catch {
     localStorage.removeItem('cyberclip-preferences');
   }
+}
+
+function updateWifiFirstTimeHint() {
+  const hasKnownDevice = Boolean(elements['wifi-host-input'].value.trim())
+    || Object.keys(loadWifiPairings()).length > 0;
+  elements['wifi-first-time-hint'].hidden = hasKnownDevice;
 }
 
 function loadWifiPairings() {
