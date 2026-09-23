@@ -29,6 +29,7 @@ flowchart LR
 | Module | Responsibility |
 |---|---|
 | `src/app.js` | UI state, settings, progress, media orchestration, cancellation |
+| `src/deviceApp.js` | Streamlined phone UI and same-origin AP WebSocket orchestration |
 | `src/serial.js` | Web Serial permission, streams, requests, timeouts, disconnect recovery |
 | `src/wifiTransport.js` | WebSocket lifecycle for the local-network WiFi transport, mirroring `serial.js`'s shape |
 | `src/protocol.js` | Packet encoding, incremental response parsing, CRC, typed payloads |
@@ -36,6 +37,8 @@ flowchart LR
 | `src/gifs.js` | GIF validation, frame compositing, disposal, source delays |
 
 Only `serial.js` and `wifiTransport.js` own their respective transport's connection lifecycle, and each exposes the same `connect`/`request`/`disconnect`/`connected` shape so `app.js` can use either interchangeably. Only `protocol.js` knows the wire representation, which both transports carry unchanged. This keeps media processing transport-independent and prevents concurrent code paths from writing interleaved packets.
+
+Both browser entries import the same `images.js`, `gifs.js`, `protocol.js`, and `wifiTransport.js` implementations. The phone therefore performs the same decode, compositing, fit, resize, JPEG-quality fallback, framing, and CRC operations as the desktop browser rather than relying on a second firmware implementation.
 
 ## Firmware modules
 
@@ -50,9 +53,11 @@ Only `serial.js` and `wifiTransport.js` own their respective transport's connect
 
 `firmware/protocol.h` contains shared numeric definitions, little-endian helpers, and the CRC implementation. Its pure helpers are exercised by the PlatformIO native test.
 
-`firmware/src/wifi_manager.h/.cpp` stores WiFi credentials and the local pairing token in NVS (via `Preferences`) and owns the station connection lifecycle. WiFi stays off until credentials are provisioned over USB, so a USB-only setup never pays for an idle radio.
+`firmware/src/wifi_manager.h/.cpp` stores station credentials, the local pairing token, hotspot mode, last enabled hotspot mode, and WPA2 password in NVS (via `Preferences`). It owns the combined AP/station lifecycle. Hotspot modes are off, automatic fallback after station failure, and always on.
 
-`firmware/src/ws_server.h/.cpp` runs a WebSocket endpoint (`ESPAsyncWebServer`/`AsyncWebSocket`) that carries the same framed packets as USB serial. It accepts one client at a time; a client's first message must be its 16-byte pairing token, after which its later messages are queued and drained on the main loop task - exactly like bytes read from `Serial` - so all protocol handling still runs on a single thread even though the WebSocket library's own callbacks run elsewhere. It only starts once `WiFi.mode(WIFI_STA)` has actually been set (from `WifiManager::connectIfNeeded()`) - starting it any earlier crashes with a lwIP "Invalid mbox" assertion, since the underlying TCP listener needs LWIP's tcpip task already running. A USB-only device that never provisions WiFi never touches the network stack at all.
+`firmware/src/ws_server.h/.cpp` runs the HTTP server and WebSocket endpoint (`ESPAsyncWebServer`/`AsyncWebSocket`). The WebSocket carries the same framed packets as USB serial and accepts one client at a time. Station-side clients must present the 16-byte pairing token. AP-side clients may use the hosted page's empty authorization preamble only when the server observes an AP-interface local address. Later bytes are queued and drained on the main loop task so protocol handling remains single-threaded.
+
+The dedicated Vite device build is gzip-compressed and generated into a firmware header before an ESP32 build. HTTP serves those immutable assets from program flash only to AP-side clients. It does not use LittleFS, so the desktop firmware updater can replace the hosted page while preserving stored media.
 
 ## Protocol framing
 
@@ -108,6 +113,6 @@ The UI reports when requested timing cannot be sustained. This bounds browser an
 
 ## PWA and privacy
 
-The service worker caches only same-origin static application assets. Selected media, serial/WebSocket packets, port/host details, and device responses are not cached. The only persisted values are presentation preferences (fit, rotation, quality, backlight, GIF delay, loop choice) and, once WiFi is set up, the device's last-known local IP and its pairing token - stored in this browser's `localStorage` only.
+The desktop service worker caches only same-origin static application assets. Selected media, serial/WebSocket packets, port/host details, and device responses are not cached. The only persisted browser values are presentation preferences and, once station WiFi is set up, the device's last-known local IP and pairing token. The hosted phone page stores only its presentation preferences.
 
-Web Serial requires HTTPS or localhost and explicit user permission. WiFi control requires no user gesture to reconnect (unlike Web Serial), but only ever talks to the local IP the ESP32 itself is hosting a WebSocket server on - there is no cloud relay, external server, analytics, or background device access anywhere in the system. The ESP32 is the only thing serving the WebSocket endpoint; the browser remains the sole orchestrator, now reachable over the user's own LAN as well as USB.
+Web Serial requires HTTPS or localhost and explicit user permission. LAN WiFi control requires the USB-issued random pairing token. The ESP32-hosted page uses HTTP on the isolated device hotspot; the WPA2 password protects network access, and tokenless WebSockets are accepted only on the AP interface. There is no cloud relay, external server, analytics, or background device access.

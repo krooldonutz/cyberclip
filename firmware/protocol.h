@@ -24,6 +24,8 @@ constexpr size_t kPlaylistMetadataCrcSize = 2;
 constexpr size_t kWifiTokenSize = 16;
 constexpr size_t kWifiMaxSsidLength = 32;
 constexpr size_t kWifiMaxPasswordLength = 64;
+constexpr size_t kHotspotMinPasswordLength = 8;
+constexpr size_t kHotspotMaxPasswordLength = 63;
 
 enum Command : uint8_t {
   HELLO = 0x01,
@@ -47,12 +49,22 @@ enum Command : uint8_t {
   GET_WIFI_STATUS = 0x41,
   CLEAR_WIFI_CREDENTIALS = 0x42,
   SET_WIFI_ENABLED = 0x43,
+  // SET_HOTSPOT_CONFIG (USB only): mode u8, passwordLength u8, password bytes.
+  // mode is HotspotMode. A zero passwordLength retains the stored password;
+  // otherwise it must contain 8..63 WPA2 bytes. Enabling a mode without a
+  // stored password returns INVALID_PAYLOAD.
+  SET_HOTSPOT_CONFIG = 0x44,
+  GET_HOTSPOT_STATUS = 0x45,
   HELLO_RESPONSE = 0x81,
   STATUS_RESPONSE = 0xA2,
   // WIFI_STATUS_RESPONSE: state u8, ipv4 4 bytes, hostnameLength u8,
   // hostname bytes, tokenIncluded u8, token 16 bytes (only when
   // tokenIncluded is 1, i.e. immediately after a first SET_WIFI_CREDENTIALS).
   WIFI_STATUS_RESPONSE = 0xA3,
+  // HOTSPOT_STATUS_RESPONSE: configuredMode u8, running u8,
+  // passwordConfigured u8, AP IPv4 4 bytes, ssidLength u8, SSID bytes.
+  // The AP address is 192.168.4.1 while running and 0.0.0.0 otherwise.
+  HOTSPOT_STATUS_RESPONSE = 0xA4,
   ACK = 0xF0,
   NACK = 0xF1,
 };
@@ -63,6 +75,31 @@ enum WifiState : uint8_t {
   WIFI_CONNECTED = 2,
   WIFI_FAILED = 3,
 };
+
+enum HotspotMode : uint8_t {
+  HOTSPOT_OFF = 0,
+  HOTSPOT_FALLBACK = 1,
+  HOTSPOT_ALWAYS = 2,
+};
+
+inline bool isValidHotspotMode(uint8_t mode) {
+  return mode <= HOTSPOT_ALWAYS;
+}
+
+inline bool isValidHotspotPasswordLength(size_t length) {
+  return length >= kHotspotMinPasswordLength &&
+         length <= kHotspotMaxPasswordLength;
+}
+
+inline bool shouldRunHotspot(uint8_t mode, bool stationUsable,
+                             bool stationConnected,
+                             uint32_t disconnectedMs,
+                             uint32_t fallbackTimeoutMs) {
+  if (mode == HOTSPOT_ALWAYS) return true;
+  if (mode != HOTSPOT_FALLBACK) return false;
+  return !stationUsable ||
+         (!stationConnected && disconnectedMs >= fallbackTimeoutMs);
+}
 
 enum MediaType : uint8_t {
   MEDIA_IMAGE = 1,

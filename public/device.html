@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#111827">
+    <meta name="description" content="Upload images and GIFs directly to this Cyberclip display.">
+    <title>Cyberclip Upload</title>
+  </head>
+  <body class="device-page">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Direct device upload</p>
+        <h1>Cyberclip</h1>
+      </div>
+      <span id="connection-pill" class="pill pill-offline">Connecting</span>
+    </header>
+
+    <main class="layout">
+      <section class="workspace">
+        <div class="panel preview-panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Preview</p>
+              <h2>Your display</h2>
+            </div>
+            <span id="media-badge" class="pill">No media</span>
+          </div>
+          <div id="preview-stage" class="preview-stage">
+            <img id="preview-image" alt="Processed display preview" hidden>
+            <div id="preview-empty" class="preview-empty">
+              <span class="preview-icon">CC</span>
+              <p>Choose an image or GIF to begin.</p>
+            </div>
+          </div>
+          <label class="file-picker">
+            <span>Choose image or GIF</span>
+            <small>JPEG, PNG, WebP, or GIF · maximum 20 MB</small>
+            <input id="media-input" type="file" accept="image/jpeg,image/png,image/webp,image/gif">
+          </label>
+          <div class="button-row transfer-actions">
+            <button id="display-button" class="button button-primary" disabled>Display image</button>
+            <button id="play-button" class="button button-primary" disabled>Play GIF</button>
+            <button id="stop-button" class="button button-danger" disabled>Stop</button>
+            <button id="clear-button" class="button button-secondary" disabled>Clear screen</button>
+            <button id="remove-stored-button" class="button button-secondary" disabled>Remove saved media</button>
+          </div>
+          <div class="progress-block">
+            <div class="progress-label">
+              <span id="progress-label">Connecting</span>
+              <span id="progress-value">0%</span>
+            </div>
+            <progress id="transfer-progress" value="0" max="100"></progress>
+          </div>
+        </div>
+
+        <aside class="panel settings-panel">
+          <div>
+            <p class="eyebrow">Adjust</p>
+            <h2>Display settings</h2>
+          </div>
+          <label>Fit
+            <select id="fit-select">
+              <option value="contain">Contain</option>
+              <option value="cover">Cover</option>
+              <option value="stretch">Stretch</option>
+            </select>
+          </label>
+          <label>Rotation
+            <select id="rotation-select">
+              <option value="0">Portrait</option>
+              <option value="1">Landscape clockwise</option>
+              <option value="2">Portrait inverted</option>
+              <option value="3">Landscape counter-clockwise</option>
+            </select>
+          </label>
+          <label>Background <input id="background-input" type="color" value="#000000"></label>
+          <label>JPEG quality
+            <span class="range-value"><output id="quality-output">82</output>%</span>
+            <input id="quality-input" type="range" min="35" max="95" value="82">
+          </label>
+          <label>Backlight
+            <span class="range-value"><output id="backlight-output">100</output>%</span>
+            <input id="backlight-input" type="range" min="0" max="100" value="100">
+          </label>
+          <div class="divider"></div>
+          <label>GIF delay override
+            <div class="input-suffix">
+              <input id="gif-delay-input" type="number" min="10" max="60000" placeholder="Source timing">
+              <span>ms</span>
+            </div>
+          </label>
+          <label class="checkbox-label"><input id="loop-input" type="checkbox" checked>Loop animation</label>
+          <label class="checkbox-label"><input id="persist-input" type="checkbox" checked disabled>Keep media on device</label>
+        </aside>
+      </section>
+
+      <section class="panel activity-panel">
+        <div class="section-heading">
+          <div><p class="eyebrow">Diagnostics</p><h2>Activity</h2></div>
+          <button id="retry-button" class="button button-secondary">Reconnect</button>
+        </div>
+        <div id="activity-log" class="activity-log" aria-live="polite"></div>
+      </section>
+    </main>
+    <template id="log-template"><div class="log-entry"><time></time><span></span></div></template>
+    <script type="module" src="/src/deviceApp.js"></script>
+  </body>
+</html>

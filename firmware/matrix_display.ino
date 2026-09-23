@@ -98,9 +98,10 @@ constexpr uint32_t kParserTimeoutMs = 1000;
 constexpr uint16_t kMinimumFrameDelayMs = 10;
 constexpr gpio_num_t kSleepButton = GPIO_NUM_0;
 constexpr uint32_t kSleepButtonDebounceMs = 30;
+constexpr uint32_t kHotspotButtonHoldMs = 1500;
 constexpr uint8_t kFirmwareMajor = 2;
 constexpr uint8_t kFirmwareMinor = 0;
-constexpr uint8_t kFirmwarePatch = 11;
+constexpr uint8_t kFirmwarePatch = 12;
 constexpr char kDeviceName[] = "CyberClip Ideaspark ESP32 ST7789";
 constexpr char kMetadataPath[] = "/playlist.meta";
 constexpr char kMetadataTempPath[] = "/playlist.tmp";
@@ -158,6 +159,9 @@ uint8_t backlight = 255;
 bool renderToDisplay = false;
 bool filesystemMounted = false;
 bool sleepButtonArmed = false;
+bool sleepButtonPressed = false;
+bool sleepButtonLongHandled = false;
+uint32_t sleepButtonPressedAt = 0;
 
 // Selects where writeFrame() sends its next reply. Set immediately before
 // feeding bytes into serialParser/wsParser in loop(), so it is always
@@ -217,27 +221,10 @@ void restoreActiveOrClear(uint8_t fallbackRotation) {
   display.fillScreen(TFT_BLACK);
 }
 
-void pollSleepButton() {
-  const bool pressed = digitalRead(kSleepButton) == LOW;
-
-  if (!sleepButtonArmed) {
-    if (!pressed) sleepButtonArmed = true;
-    return;
-  }
-  if (!pressed) return;
-
-  delay(kSleepButtonDebounceMs);
-  if (digitalRead(kSleepButton) != LOW) return;
-
+void enterDeepSleep() {
   display.setBrightness(0);
   display.sleep();
   Serial.flush();
-
-  while (digitalRead(kSleepButton) == LOW) {
-    delay(10);
-  }
-  delay(kSleepButtonDebounceMs);
-
   gpio_hold_dis(static_cast<gpio_num_t>(board::kBacklight));
   pinMode(board::kBacklight, OUTPUT);
   digitalWrite(board::kBacklight, LOW);
@@ -245,6 +232,57 @@ void pollSleepButton() {
 
   esp_sleep_enable_ext0_wakeup(kSleepButton, LOW);
   esp_deep_sleep_start();
+}
+
+void showHotspotButtonFeedback(uint8_t previousMode) {
+  const HotspotStatus status = wifiManager.hotspotStatus();
+  display.setRotation(0);
+  display.fillScreen(TFT_BLACK);
+  display.setTextColor(TFT_WHITE, TFT_BLACK);
+  display.setTextDatum(middle_center);
+  display.setTextSize(2);
+  if (status.mode != previousMode) {
+    display.drawString(status.mode == HOTSPOT_OFF ? "Hotspot off" : "Hotspot on",
+                       display.width() / 2, display.height() / 2);
+  } else {
+    display.drawString("Set AP password", display.width() / 2,
+                       display.height() / 2);
+  }
+}
+
+void pollSleepButton() {
+  const bool pressed = digitalRead(kSleepButton) == LOW;
+  if (!sleepButtonArmed) {
+    if (!pressed) sleepButtonArmed = true;
+    return;
+  }
+
+  if (pressed && !sleepButtonPressed) {
+    delay(kSleepButtonDebounceMs);
+    if (digitalRead(kSleepButton) != LOW) return;
+    sleepButtonPressed = true;
+    sleepButtonLongHandled = false;
+    sleepButtonPressedAt = millis();
+    return;
+  }
+
+  if (pressed && sleepButtonPressed && !sleepButtonLongHandled &&
+      millis() - sleepButtonPressedAt >= kHotspotButtonHoldMs) {
+    const uint8_t previousMode = wifiManager.hotspotStatus().mode;
+    wifiManager.toggleHotspotMode();
+    showHotspotButtonFeedback(previousMode);
+    sleepButtonLongHandled = true;
+    return;
+  }
+
+  if (!pressed && sleepButtonPressed) {
+    delay(kSleepButtonDebounceMs);
+    if (digitalRead(kSleepButton) == LOW) return;
+    const bool wasLongPress = sleepButtonLongHandled;
+    sleepButtonPressed = false;
+    sleepButtonLongHandled = false;
+    if (!wasLongPress) enterDeepSleep();
+  }
 }
 
 void releaseTransfer() {
@@ -611,6 +649,19 @@ void sendWifiStatus(uint16_t sequence, bool tokenIncluded,
   writeFrame(WIFI_STATUS_RESPONSE, sequence, payload, offset);
 }
 
+void sendHotspotStatus(uint16_t sequence) {
+  const HotspotStatus hotspotStatus = wifiManager.hotspotStatus();
+  const size_t ssidLength = strlen(hotspotStatus.ssid);
+  uint8_t payload[8 + kWifiMaxSsidLength];
+  payload[0] = hotspotStatus.mode;
+  payload[1] = hotspotStatus.running ? 1 : 0;
+  payload[2] = hotspotStatus.passwordConfigured ? 1 : 0;
+  memcpy(payload + 3, hotspotStatus.ip, sizeof(hotspotStatus.ip));
+  payload[7] = static_cast<uint8_t>(ssidLength);
+  memcpy(payload + 8, hotspotStatus.ssid, ssidLength);
+  writeFrame(HOTSPOT_STATUS_RESPONSE, sequence, payload, 8 + ssidLength);
+}
+
 bool persistTransferFrame() {
   char path[12];
   framePath(path, sizeof(path), stagingPlaylist.generation,
@@ -944,7 +995,7 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
       return;
 
     case SET_WIFI_CREDENTIALS: {
-      if (length < 2) {
+      if (currentReplyTarget != ReplyTarget::kSerial || length < 2) {
         sendNack(sequence, command, INVALID_PAYLOAD);
         return;
       }
@@ -983,8 +1034,9 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
       if (length != 0) {
         sendNack(sequence, command, INVALID_PAYLOAD);
       } else {
-        wifiManager.clearCredentials();
+        // A station-side WebSocket may be carrying this command.
         sendAck(sequence, command);
+        wifiManager.clearCredentials();
       }
       return;
 
@@ -992,9 +1044,40 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
       if (length != 1) {
         sendNack(sequence, command, INVALID_PAYLOAD);
       } else {
-        wifiManager.setEnabled(payload[0] != 0);
-        sendAck(sequence, command);
+        const bool enabled = payload[0] != 0;
+        if (!enabled) sendAck(sequence, command);
+        wifiManager.setEnabled(enabled);
+        if (enabled) sendAck(sequence, command);
       }
+      return;
+
+    case SET_HOTSPOT_CONFIG: {
+      if (currentReplyTarget != ReplyTarget::kSerial || length < 2) {
+        sendNack(sequence, command, INVALID_PAYLOAD);
+        return;
+      }
+      const uint8_t mode = payload[0];
+      const uint8_t passwordLength = payload[1];
+      if (!isValidHotspotMode(mode) ||
+          length != static_cast<uint32_t>(2 + passwordLength) ||
+          (passwordLength != 0 &&
+           !isValidHotspotPasswordLength(passwordLength))) {
+        sendNack(sequence, command, INVALID_PAYLOAD);
+        return;
+      }
+      char password[kHotspotMaxPasswordLength + 1] = {};
+      memcpy(password, payload + 2, passwordLength);
+      if (!wifiManager.setHotspotConfig(mode, password, passwordLength)) {
+        sendNack(sequence, command, INVALID_PAYLOAD);
+      } else {
+        sendHotspotStatus(sequence);
+      }
+      return;
+    }
+
+    case GET_HOTSPOT_STATUS:
+      if (length != 0) sendNack(sequence, command, INVALID_PAYLOAD);
+      else sendHotspotStatus(sequence);
       return;
 
     default:

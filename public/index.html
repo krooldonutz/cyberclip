@@ -59,7 +59,7 @@
           </div>
         </div>
         <p class="device-help">
-          Pair over USB once with <strong>Set up WiFi</strong> to give the device your network's SSID/password and issue it a local pairing token. After that, control and media upload also work wirelessly on your own LAN &mdash; there is no cloud relay.
+          Pair over USB once with <strong>Set up WiFi</strong> to give the device your network's SSID/password and issue it a local pairing token. After that, control, media upload, and forgetting the network work wirelessly on your own LAN &mdash; there is no cloud relay.
         </p>
         <div class="button-row">
           <button id="setup-wifi-button" class="button button-secondary" disabled>Set up WiFi</button>
@@ -72,6 +72,41 @@
         <div class="button-row">
           <button id="connect-wifi-button" class="button button-primary">Connect over WiFi</button>
         </div>
+
+        <div class="divider"></div>
+
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Phone access</p>
+            <h2>Device hotspot</h2>
+          </div>
+        </div>
+        <p class="device-help">
+          Host a private upload page directly from the display. Configure it over USB, then join the device network from your phone and open <strong>http://192.168.4.1</strong>.
+        </p>
+        <div class="hotspot-controls">
+          <label>
+            Hotspot mode
+            <select id="hotspot-mode-select">
+              <option value="0">Off</option>
+              <option value="1">Automatic fallback</option>
+              <option value="2">Always on</option>
+            </select>
+          </label>
+          <label>
+            WPA2 password
+            <input
+              id="hotspot-password-input"
+              type="password"
+              minlength="8"
+              maxlength="63"
+              autocomplete="new-password"
+              placeholder="Leave blank to keep current password"
+            >
+          </label>
+          <button id="save-hotspot-button" class="button button-secondary" disabled>Save hotspot</button>
+        </div>
+        <p id="hotspot-status" class="device-help">Connect over USB to configure phone access.</p>
       </section>
 
       <section class="workspace">

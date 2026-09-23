@@ -39,11 +39,23 @@ Open the localhost URL printed by Vite in desktop Chrome or Edge.
 5. Select fit, rotation, background, JPEG quality, and backlight.
 6. Select **Display image** or **Play GIF**.
 
+## 5. Upload from a phone
+
+1. Connect through USB in the desktop app.
+2. Under **Device hotspot**, select **Automatic fallback** or **Always on**.
+3. Enter an 8-63 character WPA2 password and select **Save hotspot**.
+4. Join the displayed `Cyberclip-......` WiFi network from your phone.
+5. Open `http://192.168.4.1`, choose an image or GIF, adjust it, and upload it.
+
+The phone performs image resizing, GIF compositing, JPEG encoding, and transfer scheduling. Firmware installation remains available only from the desktop app over USB.
+
+A short BOOT press keeps the existing sleep/wake behavior. Hold BOOT for about two seconds to switch the hotspot between **Off** and its last enabled mode.
+
 Leave **Keep media on device** enabled to store the result in onboard flash. A saved image is restored after restart; a saved GIF plays from the ESP32 without the browser or USB data connection. GIFs are limited to 255 frames. **Stop** cancels playback and any incomplete transfer, while **Remove saved media** erases the persistent copy.
 
 The ESP32 must remain powered. If USB is its only power source, unplugging USB turns the board and display off.
 
-## 5. Build the installable app
+## 6. Build the installable app
 
 ```powershell
 npm run build
