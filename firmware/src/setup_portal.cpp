@@ -17,6 +17,11 @@ namespace cyberclip {
 namespace {
 
 constexpr size_t kMaxScannedNetworks = 20;
+// How long the setup access point stays up after WiFi connects, so the
+// phone's still-open setup page has time to poll /setup/status and let the
+// user tap the "Open Cyberclip" link before it disappears - see
+// setupPortalPoll().
+constexpr uint32_t kApGracePeriodMs = 20000;
 
 DNSServer dnsServer;
 
@@ -24,6 +29,15 @@ bool active = false;
 bool routesRegistered = false;
 uint8_t pendingToken[kWifiTokenSize] = {};
 bool havePendingToken = false;
+
+// Populated once, the moment WIFI_CONNECTED is first observed (see
+// setupPortalPoll()); read by handleSetupStatus() from the AsyncWebServer's
+// own task with no explicit lock - a request landing mid-write could in
+// theory see a partially-written string, self-correcting on the next poll
+// a second later. Not worth a mutex for a cosmetic status field.
+uint32_t connectedAt = 0;
+char cachedHost[48] = {};
+char cachedHandoffUrl[192] = {};
 
 struct ScannedNetwork {
   String ssid;
@@ -167,7 +181,10 @@ loadNetworks();
 const char kConnectingPage[] PROGMEM = R"HTML(
 <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Connecting</title>
-<style>body{font-family:sans-serif;max-width:360px;margin:40px auto;padding:0 16px;text-align:center}</style>
+<style>body{font-family:sans-serif;max-width:360px;margin:40px auto;padding:0 16px;text-align:center}
+.button{display:block;padding:12px;font-size:16px;margin-top:16px;border-radius:8px;
+  background:#2563eb;color:#fff;text-decoration:none}
+.muted{color:#666;font-size:14px}</style>
 </head><body><h1 id="msg">Connecting&hellip;</h1>
 <p id="detail">Keep this page open.</p>
 <script>
@@ -177,8 +194,17 @@ async function poll() {
     const status = await response.json();
     if (status.state === 2) {
       document.getElementById('msg').textContent = 'Connected!';
-      document.getElementById('detail').textContent =
-        "Look at the board's screen for a QR code, or switch back to your usual WiFi/data and open the Cyberclip app.";
+      if (status.url) {
+        document.getElementById('detail').innerHTML =
+          'Tap below once your phone has switched back to your normal WiFi or data ' +
+          '(usually just a few seconds):<br>' +
+          '<a class="button" href="' + status.url + '">Open Cyberclip</a>' +
+          '<p class="muted">Still on the board\'s screen too, in case that\'s easier.</p>';
+      } else {
+        document.getElementById('detail').textContent =
+          "Open the Cyberclip app and connect over WiFi to " + status.host +
+          " (also shown on the board's screen).";
+      }
       return;
     }
     if (status.state === 3) {
@@ -216,8 +242,20 @@ void handleSetupSubmit(AsyncWebServerRequest *request) {
 }
 
 void handleSetupStatus(AsyncWebServerRequest *request) {
-  char body[32];
-  snprintf(body, sizeof(body), "{\"state\":%u}", wifiManager.status().state);
+  const uint8_t state = wifiManager.status().state;
+  String body = "{\"state\":";
+  body += String(state);
+  if (state == WIFI_CONNECTED) {
+    body += ",\"host\":\"";
+    body += jsonEscaped(cachedHost);
+    body += '"';
+    if (cachedHandoffUrl[0] != '\0') {
+      body += ",\"url\":\"";
+      body += jsonEscaped(cachedHandoffUrl);
+      body += '"';
+    }
+  }
+  body += '}';
   request->send(200, "application/json", body);
 }
 
@@ -291,22 +329,32 @@ void setupPortalPoll() {
   dnsServer.processNextRequest();
 
   const WifiStatus status = wifiManager.status();
-  if (status.state != WIFI_CONNECTED) return;
+
+  if (connectedAt == 0) {
+    if (status.state != WIFI_CONNECTED) return;
+    connectedAt = millis();
+
+    snprintf(cachedHost, sizeof(cachedHost), "%s.local", status.hostname);
+    if (kAppBaseUrl[0] != '\0' && havePendingToken) {
+      buildHandoffUrl(status, cachedHandoffUrl, sizeof(cachedHandoffUrl));
+      showWifiSetupQr(cachedHandoffUrl);
+    } else {
+      char ip[16];
+      snprintf(ip, sizeof(ip), "%u.%u.%u.%u", status.ip[0], status.ip[1],
+               status.ip[2], status.ip[3]);
+      showWifiSetupInfo(ip, status.hostname);
+    }
+    return;
+  }
+
+  // Keep the access point up a little longer so the phone's still-open
+  // setup page (polling /setup/status) has a chance to offer the
+  // "Open Cyberclip" link before it disappears - see kApGracePeriodMs.
+  if (millis() - connectedAt < kApGracePeriodMs) return;
 
   active = false;
   dnsServer.stop();
   WiFi.softAPdisconnect(/*wifioff=*/true);
-
-  if (kAppBaseUrl[0] != '\0' && havePendingToken) {
-    char url[192];
-    buildHandoffUrl(status, url, sizeof(url));
-    showWifiSetupQr(url);
-  } else {
-    char ip[16];
-    snprintf(ip, sizeof(ip), "%u.%u.%u.%u", status.ip[0], status.ip[1],
-             status.ip[2], status.ip[3]);
-    showWifiSetupInfo(ip, status.hostname);
-  }
 }
 
 }  // namespace cyberclip
