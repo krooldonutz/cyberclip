@@ -38,12 +38,17 @@ export class WifiTransport {
     return Boolean(this.socket) && this.socket.readyState === this.WebSocketImpl.OPEN;
   }
 
-  async connect({ host, token, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
+  async connect({
+    host,
+    token,
+    trustedDevicePage = false,
+    timeoutMs = REQUEST_TIMEOUT_MS,
+  } = {}) {
     if (!this.WebSocketImpl) {
       throw new Error('WebSocket is not available in this browser');
     }
     if (!host) throw new Error('A device IP address or hostname is required');
-    if (!token || token.byteLength !== WIFI_TOKEN_SIZE) {
+    if (!trustedDevicePage && (!token || token.byteLength !== WIFI_TOKEN_SIZE)) {
       throw new Error('A WiFi pairing token is required. Pair over USB first.');
     }
     if (this.socket) await this.disconnect();
@@ -53,7 +58,11 @@ export class WifiTransport {
     this.onStateChange('connecting');
 
     const socket = await this.openSocket(host);
-    socket.send(token);
+    if (trustedDevicePage) {
+      socket.send(new Uint8Array());
+    } else {
+      socket.send(token);
+    }
     this.socket = socket;
     this.socket.addEventListener('message', (event) => this.handleMessage(event));
     this.socket.addEventListener('close', () => {

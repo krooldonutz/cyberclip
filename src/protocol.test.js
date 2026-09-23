@@ -4,13 +4,16 @@ import {
   PacketDecoder,
   PROTOCOL_VERSION,
   WifiState,
+  HotspotMode,
   createBeginFramePayload,
   createBeginPlaylistPayload,
   createWifiCredentialsPayload,
+  createHotspotConfigPayload,
   crc16Ccitt,
   encodePacket,
   parseHelloResponse,
   parseWifiStatusResponse,
+  parseHotspotStatusResponse,
 } from './protocol.js';
 
 describe('protocol framing', () => {
@@ -133,6 +136,48 @@ describe('WiFi payloads', () => {
       4, ...new TextEncoder().encode('Home'),
       9, ...new TextEncoder().encode('sw0rdfish'),
     ));
+  });
+
+  describe('hotspot payloads', () => {
+    it('encodes mode and an optional WPA2 password', () => {
+      expect(createHotspotConfigPayload({
+        mode: HotspotMode.FALLBACK,
+        password: 'correct horse',
+      })).toEqual(Uint8Array.of(
+        HotspotMode.FALLBACK,
+        13,
+        ...new TextEncoder().encode('correct horse'),
+      ));
+      expect(createHotspotConfigPayload({
+        mode: HotspotMode.OFF,
+      })).toEqual(Uint8Array.of(HotspotMode.OFF, 0));
+    });
+
+    it('rejects invalid hotspot modes and WPA2 passwords', () => {
+      expect(() => createHotspotConfigPayload({ mode: 99 })).toThrow(/mode/);
+      expect(() => createHotspotConfigPayload({
+        mode: HotspotMode.ALWAYS,
+        password: 'short',
+      })).toThrow(/8-63/);
+    });
+
+    it('parses hotspot status without exposing the password', () => {
+      const ssid = new TextEncoder().encode('Cyberclip-A1B2C3');
+      expect(parseHotspotStatusResponse(Uint8Array.of(
+        HotspotMode.ALWAYS,
+        1,
+        1,
+        192, 168, 4, 1,
+        ssid.length,
+        ...ssid,
+      ))).toEqual({
+        mode: HotspotMode.ALWAYS,
+        running: true,
+        passwordConfigured: true,
+        ip: '192.168.4.1',
+        ssid: 'Cyberclip-A1B2C3',
+      });
+    });
   });
 
   it('accepts an empty password for open networks', () => {

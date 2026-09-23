@@ -118,6 +118,33 @@ h2 {
   line-height: 1.45;
 }
 
+.hotspot-controls {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(220px, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.hotspot-controls label {
+  display: grid;
+  gap: 8px;
+  color: #cbd5e1;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+input[type="password"],
+input[type="text"] {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 1px solid #475569;
+  border-radius: 9px;
+  color: #e2e8f0;
+  background: #0d1426;
+}
+
 .device-details div {
   display: grid;
   gap: 5px;
@@ -438,5 +465,9 @@ progress::-webkit-progress-value {
 
   .preview-stage {
     min-height: 330px;
+  }
+
+  .hotspot-controls {
+    grid-template-columns: 1fr;
   }
 }

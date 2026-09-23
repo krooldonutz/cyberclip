@@ -56,10 +56,34 @@ void test_wifi_command_bytes_do_not_collide() {
   TEST_ASSERT_EQUAL_HEX8(0x41, GET_WIFI_STATUS);
   TEST_ASSERT_EQUAL_HEX8(0x42, CLEAR_WIFI_CREDENTIALS);
   TEST_ASSERT_EQUAL_HEX8(0x43, SET_WIFI_ENABLED);
+  TEST_ASSERT_EQUAL_HEX8(0x44, SET_HOTSPOT_CONFIG);
+  TEST_ASSERT_EQUAL_HEX8(0x45, GET_HOTSPOT_STATUS);
   TEST_ASSERT_EQUAL_HEX8(0xA3, WIFI_STATUS_RESPONSE);
+  TEST_ASSERT_EQUAL_HEX8(0xA4, HOTSPOT_STATUS_RESPONSE);
   TEST_ASSERT_EQUAL_UINT8(16, kWifiTokenSize);
   TEST_ASSERT_EQUAL_UINT8(32, kWifiMaxSsidLength);
   TEST_ASSERT_EQUAL_UINT8(64, kWifiMaxPasswordLength);
+}
+
+void test_hotspot_validation_and_fallback_policy() {
+  TEST_ASSERT_TRUE(isValidHotspotMode(HOTSPOT_OFF));
+  TEST_ASSERT_TRUE(isValidHotspotMode(HOTSPOT_ALWAYS));
+  TEST_ASSERT_FALSE(isValidHotspotMode(3));
+  TEST_ASSERT_FALSE(isValidHotspotPasswordLength(7));
+  TEST_ASSERT_TRUE(isValidHotspotPasswordLength(8));
+  TEST_ASSERT_TRUE(isValidHotspotPasswordLength(63));
+  TEST_ASSERT_FALSE(isValidHotspotPasswordLength(64));
+
+  TEST_ASSERT_FALSE(shouldRunHotspot(HOTSPOT_OFF, false, false, 20000, 15000));
+  TEST_ASSERT_TRUE(shouldRunHotspot(HOTSPOT_ALWAYS, true, true, 0, 15000));
+  TEST_ASSERT_TRUE(
+      shouldRunHotspot(HOTSPOT_FALLBACK, false, false, 0, 15000));
+  TEST_ASSERT_FALSE(
+      shouldRunHotspot(HOTSPOT_FALLBACK, true, false, 14999, 15000));
+  TEST_ASSERT_TRUE(
+      shouldRunHotspot(HOTSPOT_FALLBACK, true, false, 15000, 15000));
+  TEST_ASSERT_FALSE(
+      shouldRunHotspot(HOTSPOT_FALLBACK, true, true, 20000, 15000));
 }
 
 void runTests() {
@@ -69,6 +93,7 @@ void runTests() {
   RUN_TEST(test_upload_progress_pixels);
   RUN_TEST(test_protocol_v2_playlist_metadata_integrity);
   RUN_TEST(test_wifi_command_bytes_do_not_collide);
+  RUN_TEST(test_hotspot_validation_and_fallback_policy);
   UNITY_END();
 }
 

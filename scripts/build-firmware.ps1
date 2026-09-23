@@ -26,6 +26,99 @@ function Write-Utf8File {
   [System.IO.File]::WriteAllText($Path, $Content, $encoding)
 }
 
+function Get-WebContentType {
+  param([Parameter(Mandatory = $true)][string]$Extension)
+
+  switch ($Extension.ToLowerInvariant()) {
+    '.html' { return 'text/html; charset=utf-8' }
+    '.css'  { return 'text/css; charset=utf-8' }
+    '.js'   { return 'text/javascript; charset=utf-8' }
+    '.json' { return 'application/json' }
+    '.svg'  { return 'image/svg+xml' }
+    '.png'  { return 'image/png' }
+    '.jpg'  { return 'image/jpeg' }
+    '.jpeg' { return 'image/jpeg' }
+    '.ico'  { return 'image/x-icon' }
+    '.webp' { return 'image/webp' }
+    '.woff2' { return 'font/woff2' }
+    default { return 'application/octet-stream' }
+  }
+}
+
+function Write-EmbeddedWebHeader {
+  param(
+    [Parameter(Mandatory = $true)][string]$SourceDirectory,
+    [Parameter(Mandatory = $true)][string]$HeaderPath
+  )
+
+  $files = @(Get-ChildItem -LiteralPath $SourceDirectory -File -Recurse |
+      Sort-Object FullName)
+  $entryPath = Join-Path $SourceDirectory 'device.html'
+  if (-not (Test-Path -LiteralPath $entryPath)) {
+    $entryPath = Join-Path $SourceDirectory 'index.html'
+  }
+  if ($files.Count -eq 0 -or -not (Test-Path -LiteralPath $entryPath)) {
+    throw 'The device web build did not produce device.html (or index.html).'
+  }
+
+  $builder = New-Object System.Text.StringBuilder
+  [void]$builder.AppendLine('#pragma once')
+  [void]$builder.AppendLine('')
+  [void]$builder.AppendLine('#include <stddef.h>')
+  [void]$builder.AppendLine('#include <stdint.h>')
+  [void]$builder.AppendLine('')
+  [void]$builder.AppendLine('namespace cyberclip {')
+  [void]$builder.AppendLine('struct EmbeddedWebFile {')
+  [void]$builder.AppendLine('  const char *path;')
+  [void]$builder.AppendLine('  const char *contentType;')
+  [void]$builder.AppendLine('  const uint8_t *data;')
+  [void]$builder.AppendLine('  size_t size;')
+  [void]$builder.AppendLine('};')
+  [void]$builder.AppendLine('')
+
+  for ($fileIndex = 0; $fileIndex -lt $files.Count; $fileIndex++) {
+    $inputBytes = [System.IO.File]::ReadAllBytes($files[$fileIndex].FullName)
+    $memory = New-Object System.IO.MemoryStream
+    $gzip = New-Object System.IO.Compression.GZipStream(
+      $memory, [System.IO.Compression.CompressionMode]::Compress, $true)
+    try {
+      $gzip.Write($inputBytes, 0, $inputBytes.Length)
+    } finally {
+      $gzip.Dispose()
+    }
+    $compressed = $memory.ToArray()
+    $memory.Dispose()
+
+    [void]$builder.AppendLine("static const uint8_t kDeviceWebFile$fileIndex[] = {")
+    for ($offset = 0; $offset -lt $compressed.Length; $offset += 12) {
+      $last = [Math]::Min($offset + 11, $compressed.Length - 1)
+      $values = for ($byteIndex = $offset; $byteIndex -le $last; $byteIndex++) {
+        '0x{0:X2}' -f $compressed[$byteIndex]
+      }
+      [void]$builder.AppendLine('    ' + ($values -join ', ') + ',')
+    }
+    [void]$builder.AppendLine('};')
+    [void]$builder.AppendLine('')
+  }
+
+  [void]$builder.AppendLine('static const EmbeddedWebFile kDeviceWebFiles[] = {')
+  for ($fileIndex = 0; $fileIndex -lt $files.Count; $fileIndex++) {
+    $relativePath = $files[$fileIndex].FullName.Substring(
+      $SourceDirectory.Length).TrimStart('\').Replace('\', '/')
+    if ($files[$fileIndex].FullName -eq $entryPath) {
+      $relativePath = 'index.html'
+    }
+    $contentType = Get-WebContentType $files[$fileIndex].Extension
+    [void]$builder.AppendLine(
+      "    {`"/$relativePath`", `"$contentType`", kDeviceWebFile$fileIndex, sizeof(kDeviceWebFile$fileIndex)},")
+  }
+  [void]$builder.AppendLine('};')
+  [void]$builder.AppendLine('constexpr size_t kDeviceWebFileCount =')
+  [void]$builder.AppendLine('    sizeof(kDeviceWebFiles) / sizeof(kDeviceWebFiles[0]);')
+  [void]$builder.AppendLine('}  // namespace cyberclip')
+  Write-Utf8File $HeaderPath $builder.ToString()
+}
+
 function Replace-SingleMatch {
   param(
     [Parameter(Mandatory = $true)][string]$Content,
@@ -113,6 +206,8 @@ $platformCoreDirectory = $platformInfo.core_dir.value
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $firmwareDirectory = Join-Path $repositoryRoot 'firmware'
 $firmwareSourcePath = Join-Path $firmwareDirectory 'matrix_display.ino'
+$deviceBuildDirectory = Join-Path $repositoryRoot 'dist-device'
+$deviceWebHeaderPath = Join-Path $firmwareDirectory 'generated\device_web.h'
 $manifestPath = Join-Path $repositoryRoot 'public\firmware\manifest.json'
 $serviceWorkerPath = Join-Path $repositoryRoot 'public\service-worker.js'
 $buildDirectory = Join-Path $firmwareDirectory '.pio\build\ideaspark_esp32'
@@ -122,13 +217,15 @@ $applicationPath = Join-Path $buildDirectory 'firmware.bin'
 $bootAppPath = Join-Path $platformCoreDirectory 'packages\framework-arduinoespressif32\tools\partitions\boot_app0.bin'
 $esptoolPath = Join-Path $platformCoreDirectory 'packages\tool-esptoolpy\esptool.py'
 
-foreach ($requiredPath in @($firmwareSourcePath, $manifestPath, $serviceWorkerPath)) {
+foreach ($requiredPath in @($firmwareSourcePath, $deviceWebHeaderPath,
+    $manifestPath, $serviceWorkerPath)) {
   if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
     throw "Required file not found: $requiredPath"
   }
 }
 
 $originalFirmwareSource = [System.IO.File]::ReadAllText($firmwareSourcePath)
+$originalDeviceWebHeader = [System.IO.File]::ReadAllText($deviceWebHeaderPath)
 $originalManifest = [System.IO.File]::ReadAllText($manifestPath)
 $originalServiceWorker = [System.IO.File]::ReadAllText($serviceWorkerPath)
 $manifest = $originalManifest | ConvertFrom-Json
@@ -166,6 +263,22 @@ $updatedFirmwareSource = Replace-SingleMatch $updatedFirmwareSource `
 $releaseCompleted = $false
 try {
   Write-Utf8File $firmwareSourcePath $updatedFirmwareSource
+
+  $npm = Get-Command npm -ErrorAction SilentlyContinue
+  if ($null -eq $npm) {
+    throw 'npm is required to build the embedded device web page.'
+  }
+  Write-Host 'Building the embedded device web page...'
+  Push-Location $repositoryRoot
+  try {
+    & $npm.Source run build:device -- --outDir dist-device --emptyOutDir
+    if ($LASTEXITCODE -ne 0) {
+      throw "Device web build failed with exit code $LASTEXITCODE."
+    }
+  } finally {
+    Pop-Location
+  }
+  Write-EmbeddedWebHeader $deviceBuildDirectory $deviceWebHeaderPath
 
   Write-Host "Building Cyberclip firmware $Version..."
   Push-Location $firmwareDirectory
@@ -238,6 +351,7 @@ try {
 } finally {
   if (-not $releaseCompleted) {
     Write-Utf8File $firmwareSourcePath $originalFirmwareSource
+    Write-Utf8File $deviceWebHeaderPath $originalDeviceWebHeader
     Write-Utf8File $manifestPath $originalManifest
     Write-Utf8File $serviceWorkerPath $originalServiceWorker
     Remove-Item -LiteralPath $temporaryBinaryPath -Force -ErrorAction SilentlyContinue

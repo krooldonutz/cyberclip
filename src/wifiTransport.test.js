@@ -86,6 +86,17 @@ describe('WifiTransport', () => {
     await expect(transport.connect({ host: '192.168.1.42' })).rejects.toThrow(/token/);
   });
 
+  it('allows the device-hosted page to use firmware-verified AP trust', async () => {
+    const transport = new WifiTransport({ WebSocketImpl: createFakeWebSocketImpl() });
+    const capabilities = await transport.connect({
+      host: '192.168.4.1',
+      trustedDevicePage: true,
+    });
+
+    expect(capabilities.deviceName).toBe('Test display');
+    await transport.disconnect();
+  });
+
   it('rejects a request when no response arrives', async () => {
     const transport = new WifiTransport({ WebSocketImpl: createFakeWebSocketImpl() });
     await transport.connect({ host: '192.168.1.42', token: new Uint8Array(WIFI_TOKEN_SIZE) });

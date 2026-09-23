@@ -21,9 +21,12 @@ export const Command = Object.freeze({
   GET_WIFI_STATUS: 0x41,
   CLEAR_WIFI_CREDENTIALS: 0x42,
   SET_WIFI_ENABLED: 0x43,
+  SET_HOTSPOT_CONFIG: 0x44,
+  GET_HOTSPOT_STATUS: 0x45,
   HELLO_RESPONSE: 0x81,
   STATUS_RESPONSE: 0xa2,
   WIFI_STATUS_RESPONSE: 0xa3,
+  HOTSPOT_STATUS_RESPONSE: 0xa4,
   ACK: 0xf0,
   NACK: 0xf1,
 });
@@ -35,6 +38,12 @@ export const WifiState = Object.freeze({
   CONNECTING: 1,
   CONNECTED: 2,
   FAILED: 3,
+});
+
+export const HotspotMode = Object.freeze({
+  OFF: 0,
+  FALLBACK: 1,
+  ALWAYS: 2,
 });
 
 export const ErrorCode = Object.freeze({
@@ -289,6 +298,39 @@ export function parseWifiStatusResponse(payload) {
     ? payload.slice(tokenOffset + 1, tokenOffset + 1 + WIFI_TOKEN_SIZE)
     : null;
   return { state, connected: state === WifiState.CONNECTED, ip, hostname, token };
+}
+
+export function createHotspotConfigPayload({ mode, password = '' }) {
+  if (!Object.values(HotspotMode).includes(mode)) {
+    throw new ProtocolError('Choose a valid hotspot mode');
+  }
+  const passwordBytes = new TextEncoder().encode(password);
+  if (passwordBytes.byteLength !== 0
+      && (passwordBytes.byteLength < 8 || passwordBytes.byteLength > 63)) {
+    throw new ProtocolError('Hotspot password must be 8-63 bytes');
+  }
+  return Uint8Array.of(mode, passwordBytes.byteLength, ...passwordBytes);
+}
+
+export function parseHotspotStatusResponse(payload) {
+  if (payload.byteLength < 8) {
+    throw new ProtocolError('Device returned an incomplete hotspot status response');
+  }
+  const mode = payload[0];
+  if (!Object.values(HotspotMode).includes(mode)) {
+    throw new ProtocolError('Device returned an invalid hotspot mode');
+  }
+  const ssidLength = payload[7];
+  if (payload.byteLength !== 8 + ssidLength) {
+    throw new ProtocolError('Device returned an invalid hotspot status response');
+  }
+  return {
+    mode,
+    running: payload[1] === 1,
+    passwordConfigured: payload[2] === 1,
+    ip: Array.from(payload.subarray(3, 7)).join('.'),
+    ssid: new TextDecoder().decode(payload.subarray(8)),
+  };
 }
 
 function asUint8Array(value) {

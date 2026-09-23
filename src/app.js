@@ -11,6 +11,8 @@ import {
   createFrameChunkPayload,
   createTransferIdPayload,
   createWifiCredentialsPayload,
+  createHotspotConfigPayload,
+  parseHotspotStatusResponse,
   parseWifiStatusResponse,
   WifiState,
 } from './protocol.js';
@@ -37,6 +39,10 @@ const elements = Object.fromEntries([
   'setup-wifi-button',
   'forget-wifi-button',
   'wifi-host-input',
+  'hotspot-mode-select',
+  'hotspot-password-input',
+  'save-hotspot-button',
+  'hotspot-status',
   'disconnect-button',
   'flash-button',
   'support-message',
@@ -89,6 +95,7 @@ function handleTransportStateChange(nextState, details) {
     updateDeviceDetails();
     const via = activeTransport === wifiTransport ? 'WiFi' : 'USB';
     log(`Connected to ${details.deviceName} with firmware ${details.firmwareVersion} over ${via}`);
+    if (activeTransport === serialTransport) void refreshHotspotStatus();
   }
   if (
     nextState === 'disconnected'
@@ -146,6 +153,7 @@ function bindEvents() {
   elements['connect-wifi-button'].addEventListener('click', connectWifi);
   elements['setup-wifi-button'].addEventListener('click', setupWifi);
   elements['forget-wifi-button'].addEventListener('click', forgetWifi);
+  elements['save-hotspot-button'].addEventListener('click', saveHotspot);
   elements['disconnect-button'].addEventListener('click', () => activeTransport.disconnect());
   elements['flash-button'].addEventListener('click', installFirmware);
   elements['media-input'].addEventListener('change', handleMediaSelection);
@@ -314,15 +322,64 @@ async function setupWifi() {
 }
 
 async function forgetWifi() {
-  if (!serialTransport.connected) {
-    log('Connect over USB first to forget WiFi', 'error');
+  if (!activeTransport.connected) {
+    log('Connect to the device before forgetting WiFi', 'error');
     return;
   }
+
   try {
-    await serialTransport.request(Command.CLEAR_WIFI_CREDENTIALS, new Uint8Array());
+    await activeTransport.request(Command.CLEAR_WIFI_CREDENTIALS, new Uint8Array());
     log('The device forgot its WiFi network. Set up WiFi again to reconnect wirelessly.');
   } catch (error) {
     log(`Could not forget WiFi: ${error.message}`, 'error');
+  }
+}
+
+async function refreshHotspotStatus() {
+  if (!serialTransport.connected) return;
+  try {
+    const response = await serialTransport.request(
+      Command.GET_HOTSPOT_STATUS,
+      new Uint8Array(),
+      { expectedCommand: Command.HOTSPOT_STATUS_RESPONSE },
+    );
+    const status = parseHotspotStatusResponse(response.payload);
+    elements['hotspot-mode-select'].value = String(status.mode);
+    elements['hotspot-status'].textContent = status.running
+      ? `${status.ssid} is running at http://${status.ip}`
+      : status.passwordConfigured
+        ? `${status.ssid} is configured but not currently running.`
+        : 'Set an 8-63 character password before enabling the hotspot.';
+    elements['save-hotspot-button'].disabled = false;
+  } catch (error) {
+    elements['save-hotspot-button'].disabled = true;
+    elements['hotspot-status'].textContent = error.errorCode === 2
+      ? 'Update the device firmware to configure phone access.'
+      : `Hotspot status unavailable: ${error.message}`;
+  }
+}
+
+async function saveHotspot() {
+  if (!serialTransport.connected) return;
+  try {
+    const payload = createHotspotConfigPayload({
+      mode: Number(elements['hotspot-mode-select'].value),
+      password: elements['hotspot-password-input'].value,
+    });
+    const response = await serialTransport.request(
+      Command.SET_HOTSPOT_CONFIG,
+      payload,
+      { expectedCommand: Command.HOTSPOT_STATUS_RESPONSE, timeoutMs: 20000 },
+    );
+    elements['hotspot-password-input'].value = '';
+    const status = parseHotspotStatusResponse(response.payload);
+    elements['hotspot-mode-select'].value = String(status.mode);
+    elements['hotspot-status'].textContent = status.running
+      ? `${status.ssid} is running at http://${status.ip}`
+      : `${status.ssid} saved; the hotspot is not currently running.`;
+    log(`Device hotspot updated: ${status.ssid}`);
+  } catch (error) {
+    log(`Could not update hotspot: ${error.message}`, 'error');
   }
 }
 
@@ -613,7 +670,8 @@ function setState(nextState) {
   elements['connect-button'].disabled = nextState !== 'disconnected' || !webSerialAvailable;
   elements['connect-wifi-button'].disabled = nextState !== 'disconnected';
   elements['setup-wifi-button'].disabled = !ready || !connectedViaUsb;
-  elements['forget-wifi-button'].disabled = !ready || !connectedViaUsb;
+  elements['forget-wifi-button'].disabled = !ready;
+  elements['save-hotspot-button'].disabled = !ready || !connectedViaUsb;
   elements['disconnect-button'].disabled = !connected || busy;
   elements['flash-button'].disabled = busy || !webSerialAvailable;
   elements['display-button'].disabled = !ready || !selectedFile || isGif;

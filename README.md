@@ -2,7 +2,7 @@
 
 Cyberclip is a VIA-style web controller for the **ideaspark ESP32 development board with an integrated 1.9-inch 170×320 ST7789 TFT**. It processes images and GIFs in the browser, compresses each display frame as JPEG, and sends it directly to the board over USB with the Web Serial API, or over your own local WiFi network.
 
-There is no application server, Python CLI, cloud relay, or Bluetooth pairing. WiFi is optional and strictly local-network: the board joins your own WiFi and the browser talks to it directly at its local IP address, with no cloud relay or external backend involved. WiFi credentials and a local pairing token are provisioned once over USB (see [WiFi control](#wifi-control) below); after that, control and media upload work the same way whether you're connected by cable or over WiFi. Firmware flashing remains USB-only. The ESP32 receives validated frames, decodes them, and draws them to its display. When **Keep media on device** is enabled, it also stores the image or GIF in flash and resumes it without a USB data connection.
+There is no application server, Python CLI, cloud relay, or Bluetooth pairing. WiFi is optional and local-only: the board can join your existing network or host its own WPA2-protected hotspot and phone upload page. WiFi and hotspot settings are provisioned over USB (see [WiFi control](#wifi-control) below). Media processing runs in the connected browser using the same image, GIF, and protocol modules in the desktop and hosted builds. Firmware flashing remains USB-only. The ESP32 receives validated frames, decodes them, and draws them to its display. When **Keep media on device** is enabled, it also stores the image or GIF in flash and resumes it without a USB data connection.
 
 ## Supported hardware
 
@@ -129,6 +129,8 @@ Persisted images and GIFs survive reset and power loss. The board still needs po
 
 Press the board's **BOOT** button during normal operation to enter deep sleep and turn off the display. Press **BOOT** again to wake the board and resume persisted media. Deep sleep minimizes consumption but does not physically disconnect power. The **EN/RESET** button remains a hardware reset, and holding BOOT while resetting or connecting power still enters the ESP32 firmware-download mode.
 
+Hold **BOOT** for about two seconds during normal operation to toggle the hotspot between **Off** and its last enabled mode. A short press keeps the existing sleep behavior. The display shows which hotspot mode was selected.
+
 ## USB protocol
 
 Every packet uses little-endian numeric fields:
@@ -160,7 +162,19 @@ WiFi is an additional, optional transport alongside USB - USB keeps working exac
 3. The board joins your network and reports its local IP address (and an `<name>.local` hostname) back over USB. On the very first pairing, it also issues a random 16-byte pairing token, which the web app stores in this browser only.
 4. Enter that IP address (or hostname) under **Connect over WiFi** and select **Connect over WiFi**. From then on, image/GIF upload, playlists, brightness, and clear/status all work the same way as over USB.
 
-The pairing token gates the WiFi connection so other devices on your network cannot control the display or read its status without it. Firmware updates remain USB-only. Select **Forget WiFi** to have the board forget its network and pairing token; set up WiFi again afterward to issue a new one (for example, to pair a different browser with the same board).
+The pairing token gates the WiFi connection so other devices on your network cannot control the display or read its status without it. Firmware updates remain USB-only. Select **Forget WiFi** over USB or an active LAN connection to have the board forget its network and pairing token; set up WiFi again afterward to issue a new one (for example, to pair a different browser with the same board).
+
+### ESP32-hosted phone page
+
+Connect to the board over USB and configure **Device hotspot** in the desktop app. Choose a mode and set a device-specific WPA2 password of 8-63 characters:
+
+- **Off** never starts the hotspot.
+- **Automatic fallback** starts it when home WiFi is not configured or cannot connect, and stops it after home WiFi recovers.
+- **Always on** keeps the hotspot available while the board may also remain connected to home WiFi.
+
+When the hotspot is running, join the displayed `Cyberclip-......` network from a phone and open `http://192.168.4.1`. The hosted page supports image/GIF selection, exact preview and JPEG processing, fit, rotation, background, quality, backlight, timing, looping, persistence, clearing, and removing stored media. It intentionally contains no firmware installer or network setup controls.
+
+The hotspot's WPA2 password is the access boundary for its self-hosted page. A WebSocket is accepted without the LAN pairing token only when the firmware observes that it arrived through the AP interface. Home-network WebSockets still require the random token issued during USB pairing. The password is stored on the device and is never returned to either web UI.
 
 ## Troubleshooting
 
