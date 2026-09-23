@@ -6,6 +6,7 @@
 #include <driver/rtc_io.h>
 #include <esp_heap_caps.h>
 #include <esp_sleep.h>
+#include <esp32-hal-cpu.h>
 
 #include "protocol.h"
 #include "src/wifi_manager.h"
@@ -28,7 +29,7 @@ constexpr uint16_t kOffsetX = 35;
 constexpr uint16_t kOffsetY = 0;
 constexpr bool kInvert = true;
 constexpr bool kRgbOrder = false;
-constexpr uint32_t kSpiFrequency = 40000000;
+constexpr uint32_t kSpiFrequency = 80000000;
 constexpr uint8_t kBacklightPwmChannel = 7;
 }  // namespace board
 
@@ -92,6 +93,7 @@ using namespace cyberclip;
 
 namespace {
 constexpr uint32_t kSerialBaud = 921600;
+constexpr uint32_t kCpuFrequencyMhz = 160;
 constexpr uint32_t kMaxFrameSize = 128 * 1024;
 constexpr uint32_t kConservativeStoredBytes = 8 * 1024 * 1024;
 constexpr uint32_t kParserTimeoutMs = 1000;
@@ -101,7 +103,7 @@ constexpr uint32_t kSleepButtonDebounceMs = 30;
 constexpr uint32_t kHotspotButtonHoldMs = 1500;
 constexpr uint8_t kFirmwareMajor = 2;
 constexpr uint8_t kFirmwareMinor = 0;
-constexpr uint8_t kFirmwarePatch = 12;
+constexpr uint8_t kFirmwarePatch = 14;
 constexpr char kDeviceName[] = "CyberClip Ideaspark ESP32 ST7789";
 constexpr char kMetadataPath[] = "/playlist.meta";
 constexpr char kMetadataTempPath[] = "/playlist.tmp";
@@ -155,7 +157,7 @@ struct UploadProgress {
   bool visible = false;
 } uploadProgress;
 
-uint8_t backlight = 255;
+uint8_t backlight = 128;
 bool renderToDisplay = false;
 bool filesystemMounted = false;
 bool sleepButtonArmed = false;
@@ -1181,6 +1183,7 @@ FrameParser wsParser;
 }  // namespace
 
 void setup() {
+  setCpuFrequencyMhz(kCpuFrequencyMhz);
   Serial.setRxBufferSize(8192);
   Serial.begin(kSerialBaud);
   rtc_gpio_deinit(kSleepButton);

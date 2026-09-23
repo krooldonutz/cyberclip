@@ -24,6 +24,7 @@ WifiManager wifiManager;
 
 void WifiManager::begin() {
   loadFromPreferences();
+  WiFi.setSleep(true);
   const uint32_t suffix = static_cast<uint32_t>(ESP.getEfuseMac()) & 0xFFFFFF;
   snprintf(hotspotSsid_, sizeof(hotspotSsid_), "CyberClip-%06X", suffix);
   snprintf(status_.hostname, sizeof(status_.hostname), "cyberclip-%06x",

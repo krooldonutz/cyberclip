@@ -24,6 +24,13 @@ The current board profile uses the seller-reported display connections:
 
 Board revisions can differ. The current profile uses RGB panel order (`kRgbOrder = false`). Verify these pins, the 35-pixel horizontal panel offset, inversion, and RGB/BGR order against the example firmware supplied with your board before relying on the display.
 
+To reduce steady-state power consumption and heat without compromising display
+updates, the firmware runs the ESP32 at 160 MHz, enables WiFi station modem
+sleep, and starts the TFT backlight at 50%. The integrated display uses an
+80 MHz SPI clock to minimize the time that each frame is visibly redrawn. The
+backlight control can still raise it to 100%; previously saved browser
+preferences remain unchanged.
+
 ## How it works
 
 ```text
@@ -128,6 +135,10 @@ Source GIF timing is preserved per frame at the format's 10 ms resolution unless
 Persisted images and GIFs survive reset and power loss. The board still needs power: disconnecting USB also turns the display off unless the ESP32 is powered from another suitable source.
 
 Press the board's **BOOT** button during normal operation to enter deep sleep and turn off the display. Press **BOOT** again to wake the board and resume persisted media. Deep sleep minimizes consumption but does not physically disconnect power. The **EN/RESET** button remains a hardware reset, and holding BOOT while resetting or connecting power still enters the ESP32 firmware-download mode.
+
+The normal 160 MHz CPU and WiFi modem-sleep settings keep USB, WiFi, and stored
+media playback available. For the lowest consumption and coolest idle state,
+use the BOOT-button deep sleep mode.
 
 Hold **BOOT** for about two seconds during normal operation to toggle the hotspot between **Off** and its last enabled mode. A short press keeps the existing sleep behavior. The display shows which hotspot mode was selected.
 
