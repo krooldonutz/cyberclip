@@ -772,7 +772,7 @@ function restorePreferences() {
     elements['rotation-select'].value = values.rotation ?? '0';
     elements['background-input'].value = values.background ?? '#000000';
     elements['quality-input'].value = values.quality ?? '82';
-    elements['backlight-input'].value = values.backlight ?? '100';
+    elements['backlight-input'].value = values.backlight ?? '50';
     elements['gif-delay-input'].value = values.gifDelay ?? '';
     elements['loop-input'].checked = values.loop ?? true;
     elements['persist-input'].checked = values.persist ?? true;

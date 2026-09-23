@@ -55,6 +55,12 @@ Both browser entries import the same `images.js`, `gifs.js`, `protocol.js`, and 
 
 `firmware/src/wifi_manager.h/.cpp` stores station credentials, the local pairing token, hotspot mode, last enabled hotspot mode, and WPA2 password in NVS (via `Preferences`). It owns the combined AP/station lifecycle. Hotspot modes are off, automatic fallback after station failure, and always on.
 
+Normal operation uses a balanced 160 MHz CPU clock, an 80 MHz integrated-panel
+SPI clock, WiFi station modem sleep, and a 50% default TFT backlight. The higher
+render throughput shortens visible progressive redraws without returning to the
+full-power defaults. The existing BOOT-button deep sleep remains the
+lowest-power state and turns off the display until wake.
+
 `firmware/src/ws_server.h/.cpp` runs the HTTP server and WebSocket endpoint (`ESPAsyncWebServer`/`AsyncWebSocket`). The WebSocket carries the same framed packets as USB serial and accepts one client at a time. Station-side clients must present the 16-byte pairing token. AP-side clients may use the hosted page's empty authorization preamble only when the server observes an AP-interface local address. Later bytes are queued and drained on the main loop task so protocol handling remains single-threaded.
 
 The dedicated Vite device build is gzip-compressed and generated into a firmware header before an ESP32 build. HTTP serves those immutable assets from program flash only to AP-side clients. It does not use LittleFS, so the desktop firmware updater can replace the hosted page while preserving stored media.
