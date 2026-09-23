@@ -168,7 +168,7 @@ If the board is already flashed with Cyberclip firmware and has never been paire
 
 1. Power the board on. Since it has no stored WiFi credentials, it broadcasts its own temporary, open WiFi network named `Cyberclip-Setup-XXXX` (the suffix is unique per board).
 2. On your phone, join that network. Most phones detect it as a captive portal and open its setup page automatically; if not, open a browser and go to `192.168.4.1`.
-3. Enter your home WiFi's name and password and submit. Keep the page open - it shows "Connecting..." and then either "Connected!" or "Could not connect" (with a link back to try again, without needing to rejoin the setup network).
+3. Tap your home WiFi's name from the scanned list (or select "Enter a network name manually" if it isn't shown), enter its password, and submit. Keep the page open - it shows "Connecting..." and then either "Connected!" or "Could not connect" (with a link back to try again, without needing to rejoin the setup network).
 4. Once connected, the setup network disappears. Look at the board's own screen:
    - If [`kAppBaseUrl`](firmware/matrix_display.ino) has been configured (see below), it shows a **QR code**. Switch your phone back to its normal WiFi or mobile data, then scan it - it opens the Cyberclip web app already pointed at this board, ready to connect with one tap.
    - Otherwise, it shows the board's new IP address as plain text. Open the Cyberclip web app yourself, enter that address under **Connect over WiFi**, and select **Connect over WiFi**.
