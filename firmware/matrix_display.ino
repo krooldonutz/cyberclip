@@ -1196,11 +1196,13 @@ void showWifiSetupInfo(const char *ip, const char *hostname) {
   display.println("connect over WiFi to:");
   display.setCursor(10, 150);
   display.setTextSize(2);
-  display.print(ip);
-  display.setTextSize(1);
-  display.setCursor(10, 190);
   display.print(hostname);
   display.print(".local");
+  display.setTextSize(1);
+  display.setCursor(10, 190);
+  display.print("or ");
+  display.print(ip);
+  display.print(" if that doesn't work");
 }
 
 }  // namespace cyberclip

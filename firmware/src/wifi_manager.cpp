@@ -1,5 +1,6 @@
 #include "wifi_manager.h"
 
+#include <ESPmDNS.h>
 #include <Preferences.h>
 #include <WiFi.h>
 #include <esp_random.h>
@@ -19,6 +20,16 @@ WifiManager wifiManager;
 
 void WifiManager::begin() {
   loadFromPreferences();
+
+  // Unique per device (matches the MAC bytes used for the setup portal's
+  // "Cyberclip-Setup-XXXX" AP name), so "<hostname>.local" identifies this
+  // specific board even with several on the same network. Reading the MAC
+  // works regardless of WiFi mode.
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+  snprintf(status_.hostname, sizeof(status_.hostname), "cyberclip-%02x%02x",
+           mac[4], mac[5]);
+
   // Deliberately leave WiFi/LWIP untouched here: WiFi.mode(WIFI_OFF) does
   // not bring up LWIP's tcpip task, and starting the WebSocket server (see
   // connectIfNeeded()) before that task exists crashes with a lwIP
@@ -153,6 +164,13 @@ void WifiManager::poll() {
     status_.ip[1] = ip[1];
     status_.ip[2] = ip[2];
     status_.ip[3] = ip[3];
+    // "<hostname>.local" then reaches the device without needing its IP -
+    // MDNS.begin() registers it once; it keeps answering with the current
+    // IP even across a later DHCP renewal, so this never needs restarting.
+    if (!mdnsStarted_ && MDNS.begin(status_.hostname)) {
+      mdnsStarted_ = true;
+      MDNS.addService("ws", "tcp", 80);
+    }
     return;
   }
 

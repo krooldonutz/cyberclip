@@ -253,14 +253,17 @@ void registerRoutes() {
 }
 
 void buildHandoffUrl(const WifiStatus &status, char *url, size_t urlSize) {
-  char ip[16];
-  snprintf(ip, sizeof(ip), "%u.%u.%u.%u", status.ip[0], status.ip[1],
-           status.ip[2], status.ip[3]);
+  // "<hostname>.local" rather than the raw IP - see WifiManager::poll(),
+  // which starts mDNS right before this runs (both happen within the same
+  // loop() iteration, via wifiManager.poll() called just before
+  // setupPortalPoll()) - so it stays reachable across DHCP renewals too.
+  char host[48];
+  snprintf(host, sizeof(host), "%s.local", status.hostname);
   char token[kWifiTokenSize * 2 + 1];
   for (size_t i = 0; i < kWifiTokenSize; ++i) {
     snprintf(token + i * 2, 3, "%02x", pendingToken[i]);
   }
-  snprintf(url, urlSize, "%s?host=%s&token=%s", kAppBaseUrl, ip, token);
+  snprintf(url, urlSize, "%s?host=%s&token=%s", kAppBaseUrl, host, token);
 }
 
 }  // namespace

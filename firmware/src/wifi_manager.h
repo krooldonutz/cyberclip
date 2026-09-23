@@ -10,6 +10,9 @@ namespace cyberclip {
 struct WifiStatus {
   uint8_t state = WIFI_OFF;
   uint8_t ip[4] = {0, 0, 0, 0};
+  // Unique per device (MAC-suffixed by WifiManager::begin()) and registered
+  // as an mDNS name once connected, so "<hostname>.local" reaches the
+  // device without needing its IP - see WifiManager::poll().
   char hostname[33] = "cyberclip";
 };
 
@@ -49,6 +52,7 @@ class WifiManager {
   bool enabled_ = false;
   bool hasCredentials_ = false;
   bool hasToken_ = false;
+  bool mdnsStarted_ = false;
   uint8_t token_[kWifiTokenSize] = {};
   char ssid_[kWifiMaxSsidLength + 1] = {};
   char password_[kWifiMaxPasswordLength + 1] = {};

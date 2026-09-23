@@ -322,8 +322,9 @@ async function setupWifi() {
       throw new Error(`Could not join "${ssid}" - check the network name and password`);
     }
 
-    saveWifiPairing(wifiStatus.ip, token);
-    log(`WiFi ready at ${wifiStatus.ip} (try ${wifiStatus.hostname}.local too). Use "Connect over WiFi" from here on.`);
+    const host = `${wifiStatus.hostname}.local`;
+    saveWifiPairing(host, token);
+    log(`WiFi ready at ${host} (try the IP ${wifiStatus.ip} instead if that doesn't resolve). Use "Connect over WiFi" from here on.`);
     setProgress(100, 'WiFi ready');
   } catch (error) {
     log(`WiFi setup failed: ${error.message}`, 'error');

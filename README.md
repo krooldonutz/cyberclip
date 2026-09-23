@@ -159,8 +159,8 @@ WiFi is an additional, optional transport alongside USB - USB keeps working exac
 
 1. Connect over USB first, as above.
 2. Select **Set up WiFi**, and enter your network's name (SSID) and password. The web app sends these to the board over the existing USB connection.
-3. The board joins your network and reports its local IP address (and an `<name>.local` hostname) back over USB. On the very first pairing, it also issues a random 16-byte pairing token, which the web app stores in this browser only.
-4. Enter that IP address (or hostname) under **Connect over WiFi** and select **Connect over WiFi**. From then on, image/GIF upload, playlists, brightness, and clear/status all work the same way as over USB.
+3. The board joins your network and starts answering at a stable `<name>.local` address (via mDNS - each board gets a unique name, so several on one network don't collide) back over USB, along with its numeric IP as a fallback. On the very first pairing, it also issues a random 16-byte pairing token, which the web app stores in this browser only.
+4. That `.local` address is prefilled under **Connect over WiFi** - select **Connect over WiFi**. From then on, image/GIF upload, playlists, brightness, and clear/status all work the same way as over USB. If `.local` doesn't resolve on your network (mainly a Windows/Bonjour thing), use the numeric IP the app logged instead.
 
 ### Phone-only setup (no computer or USB cable)
 
@@ -170,8 +170,8 @@ If the board is already flashed with Cyberclip firmware and has never been paire
 2. On your phone, join that network. Most phones detect it as a captive portal and open its setup page automatically; if not, open a browser and go to `192.168.4.1`.
 3. Tap your home WiFi's name from the scanned list (or select "Enter a network name manually" if it isn't shown), enter its password, and submit. Keep the page open - it shows "Connecting..." and then either "Connected!" or "Could not connect" (with a link back to try again, without needing to rejoin the setup network).
 4. Once connected, the setup network disappears. Look at the board's own screen:
-   - If [`kAppBaseUrl`](firmware/matrix_display.ino) has been configured (see below), it shows a **QR code**. Switch your phone back to its normal WiFi or mobile data, then scan it - it opens the Cyberclip web app already pointed at this board, ready to connect with one tap.
-   - Otherwise, it shows the board's new IP address as plain text. Open the Cyberclip web app yourself, enter that address under **Connect over WiFi**, and select **Connect over WiFi**.
+   - If [`kAppBaseUrl`](firmware/matrix_display.ino) has been configured (see below), it shows a **QR code**. Switch your phone back to its normal WiFi or mobile data, then scan it - it opens the Cyberclip web app already pointed at this board's `.local` address, ready to connect with one tap.
+   - Otherwise, it shows the board's new `<name>.local` address as plain text (with its numeric IP underneath, in case `.local` doesn't resolve on your network). Open the Cyberclip web app yourself, enter that address under **Connect over WiFi**, and select **Connect over WiFi**.
 
 For the QR code to work, set `kAppBaseUrl` near the top of `firmware/matrix_display.ino` to wherever you deployed the web app (see [Local development](#local-development)), e.g. `"https://your-cyberclip-deployment.example/"`, then rebuild and reflash. Leave it as `""` to always show the plain-IP fallback instead.
 
