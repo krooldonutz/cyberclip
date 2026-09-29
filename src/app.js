@@ -213,11 +213,18 @@ async function installFirmware() {
         setProgress(elements['transfer-progress'].value, message);
       },
     });
-    log(`Installed Cyberclip firmware ${manifest.version}`);
+    const target = manifest.board ?? manifest.chip;
+    log(`Installed Cyberclip firmware ${manifest.version}${target ? ` for ${target}` : ''}`);
     setProgress(100, 'Firmware installed');
-    await abortableDelay(1000);
+    // Native USB boards (ESP32-S3) re-enumerate after reset and need longer.
+    await abortableDelay(manifest.chip === 'ESP32-S3' ? 3000 : 1000);
     activeTransport = serialTransport;
-    await serialTransport.connect({ port });
+    try {
+      await serialTransport.connect({ port });
+    } catch (error) {
+      if (manifest.chip !== 'ESP32-S3') throw error;
+      await connectUsb();
+    }
   } catch (error) {
     const message = error.name === 'NotFoundError'
       ? 'No serial device was selected'

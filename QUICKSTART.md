@@ -17,6 +17,12 @@ pio run -d firmware -t upload
 
 The firmware targets an ESP32 Dev Module, uses the integrated ST7789 at 170×320, and communicates at 921600 baud. PlatformIO downloads the pinned display and JPEG libraries automatically.
 
+For a **LilyGO T-Display-S3**, no CH340 driver is needed (it uses native USB). Select its environment instead:
+
+```powershell
+pio run -d firmware -e lilygo_t_display_s3 -t upload
+```
+
 If uploading at 921600 is unreliable on your computer, lower only `upload_speed` in `firmware/platformio.ini`. Do not change `monitor_speed` or the firmware/browser transport rate.
 
 ## 3. Start the web app locally
