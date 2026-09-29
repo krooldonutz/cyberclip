@@ -10,6 +10,8 @@ const RESET_SEQUENCES = {
 };
 
 export const ESPRESSIF_USB_VENDOR_ID = 0x303a;
+export const ESP32S3_RTC_CNTL_OPTION1_REG = 0x6000812c;
+export const ESP32S3_RTC_CNTL_FORCE_DOWNLOAD_BOOT = 0x1;
 export const USB_JTAG_SERIAL_PRODUCT_ID = 0x1001;
 export const DOWNLOAD_PORT_FILTER = Object.freeze({
   usbVendorId: ESPRESSIF_USB_VENDOR_ID,
@@ -168,6 +170,15 @@ export async function flashBundledFirmware({
     });
     onProgress(100);
     onStatus(`Resetting ${chipName}`);
+    if (chipName === 'ESP32-S3') {
+      // A 1200-baud reboot sets FORCE_DOWNLOAD_BOOT, which survives a reset;
+      // clear it or the board boots straight back into download mode.
+      await loader.writeReg(
+        ESP32S3_RTC_CNTL_OPTION1_REG,
+        0,
+        ESP32S3_RTC_CNTL_FORCE_DOWNLOAD_BOOT,
+      );
+    }
     await loader.after('custom_reset', false, RESET_SEQUENCES[chipName] ?? RESET_SEQUENCES.ESP32);
     return { ...manifest, chip: chipName, board: build.board };
   } finally {

@@ -103,12 +103,15 @@ describe('bundled firmware flashing', () => {
       .mockResolvedValueOnce(response(firmware));
     const writeFlash = vi.fn().mockResolvedValue();
     const after = vi.fn().mockResolvedValue();
+    const writeReg = vi.fn().mockResolvedValue();
     class FakeLoader {
       chip = { CHIP_NAME: 'ESP32-S3' };
 
       main = vi.fn().mockResolvedValue('ESP32-S3');
 
       writeFlash = writeFlash;
+
+      writeReg = writeReg;
 
       after = after;
     }
@@ -132,6 +135,9 @@ describe('bundled firmware flashing', () => {
       flashMode: 'keep',
       flashFreq: 'keep',
     }));
+    expect(writeReg).toHaveBeenCalledWith(0x6000812c, 0, 0x1);
+    expect(writeReg.mock.invocationCallOrder[0])
+      .toBeLessThan(after.mock.invocationCallOrder[0]);
     expect(after).toHaveBeenCalledWith('custom_reset', false, 'D0|R1|W200|R0|W500');
     expect(result).toMatchObject({ chip: 'ESP32-S3', board: 'LilyGO T-Display-S3' });
   });
