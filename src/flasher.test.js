@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { flashBundledFirmware, resolveDownloadPort } from './flasher.js';
+import {
+  DOWNLOAD_PORT_FILTER,
+  DownloadPortNotAuthorizedError,
+  flashBundledFirmware,
+  resolveDownloadPort,
+} from './flasher.js';
 
 function response(body, { ok = true, status = 200 } = {}) {
   return {
@@ -223,5 +228,33 @@ describe('native USB download port', () => {
       wait: async () => {},
       timeoutMs: 500,
     })).rejects.toThrow('USB JTAG/serial debug unit');
+  });
+
+  it('opens a picker filtered to the download port when it is not authorized', async () => {
+    const pixie = port(0x303a, 0x0002);
+    const jtag = port(0x303a, 0x1001);
+    const serial = {
+      getPorts: vi.fn().mockResolvedValue([]),
+      requestPort: vi.fn().mockResolvedValue(jtag),
+    };
+
+    const result = await resolveDownloadPort(pixie, { serial, wait: async () => {} });
+
+    expect(serial.requestPort).toHaveBeenCalledWith({ filters: [DOWNLOAD_PORT_FILTER] });
+    expect(result).toBe(jtag);
+  });
+
+  it('reports an unauthorized download port when the picker cannot open', async () => {
+    const pixie = port(0x303a, 0x0002);
+    const serial = {
+      getPorts: vi.fn().mockResolvedValue([]),
+      requestPort: vi.fn().mockRejectedValue(new DOMException('No gesture', 'SecurityError')),
+    };
+
+    await expect(resolveDownloadPort(pixie, {
+      serial,
+      wait: async () => {},
+      timeoutMs: 500,
+    })).rejects.toBeInstanceOf(DownloadPortNotAuthorizedError);
   });
 });
