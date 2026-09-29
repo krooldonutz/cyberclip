@@ -1,8 +1,11 @@
 import './styles.css';
 import {
+  DOWNLOAD_PORT_FILTER,
+  DownloadPortNotAuthorizedError,
   ESPRESSIF_USB_VENDOR_ID,
   USB_JTAG_SERIAL_PRODUCT_ID,
   flashBundledFirmware,
+  isDownloadPort,
 } from './flasher.js';
 import { decodeGif, iterateGifFrames } from './gifs.js';
 import { encodeSourceForDisplay, prepareImageFile } from './images.js';
@@ -195,6 +198,17 @@ function bindEvents() {
   });
 }
 
+let awaitingDownloadPort = false;
+
+async function chooseFlashPort() {
+  const authorized = await navigator.serial.getPorts();
+  const downloadPort = authorized.find(isDownloadPort);
+  if (downloadPort) return downloadPort;
+  return navigator.serial.requestPort(
+    awaitingDownloadPort ? { filters: [DOWNLOAD_PORT_FILTER] } : undefined,
+  );
+}
+
 async function installFirmware() {
   if (!globalThis.confirm(
     'Install the bundled Cyberclip firmware? Keep the USB cable connected until installation finishes.',
@@ -204,7 +218,7 @@ async function installFirmware() {
 
   let port = serialTransport.port;
   try {
-    if (!port) port = await navigator.serial.requestPort();
+    if (!port) port = await chooseFlashPort();
     if (activeTransport.connected) await activeTransport.disconnect();
     setState('flashing');
     setProgress(0, 'Preparing firmware');
@@ -218,6 +232,7 @@ async function installFirmware() {
       },
     });
     const target = manifest.board ?? manifest.chip;
+    awaitingDownloadPort = false;
     log(`Installed Cyberclip firmware ${manifest.version}${target ? ` for ${target}` : ''}`);
     setProgress(100, 'Firmware installed');
     activeTransport = serialTransport;
@@ -229,6 +244,7 @@ async function installFirmware() {
       await serialTransport.connect({ port });
     }
   } catch (error) {
+    awaitingDownloadPort = error instanceof DownloadPortNotAuthorizedError;
     const message = error.name === 'NotFoundError'
       ? 'No serial device was selected'
       : error.message;

@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { flashBundledFirmware, resolveDownloadPort } from './flasher.js';
+import {
+  DOWNLOAD_PORT_FILTER,
+  DownloadPortNotAuthorizedError,
+  flashBundledFirmware,
+  resolveDownloadPort,
+} from './flasher.js';
 
 function response(body, { ok = true, status = 200 } = {}) {
   return {
@@ -97,13 +102,16 @@ describe('bundled firmware flashing', () => {
       }))
       .mockResolvedValueOnce(response(firmware));
     const writeFlash = vi.fn().mockResolvedValue();
-    const after = vi.fn().mockResolvedValue();
+    const after = vi.fn().mockRejectedValue(new Error('Invalid custom reset sequence'));
+    const writeReg = vi.fn().mockResolvedValue();
     class FakeLoader {
       chip = { CHIP_NAME: 'ESP32-S3' };
 
       main = vi.fn().mockResolvedValue('ESP32-S3');
 
       writeFlash = writeFlash;
+
+      writeReg = writeReg;
 
       after = after;
     }
@@ -127,6 +135,9 @@ describe('bundled firmware flashing', () => {
       flashMode: 'keep',
       flashFreq: 'keep',
     }));
+    expect(writeReg).toHaveBeenCalledWith(0x6000812c, 0, 0x1);
+    expect(writeReg.mock.invocationCallOrder[0])
+      .toBeLessThan(after.mock.invocationCallOrder[0]);
     expect(after).toHaveBeenCalledWith('custom_reset', false, 'D0|R1|W200|R0|W500');
     expect(result).toMatchObject({ chip: 'ESP32-S3', board: 'LilyGO T-Display-S3' });
   });
@@ -223,5 +234,33 @@ describe('native USB download port', () => {
       wait: async () => {},
       timeoutMs: 500,
     })).rejects.toThrow('USB JTAG/serial debug unit');
+  });
+
+  it('opens a picker filtered to the download port when it is not authorized', async () => {
+    const pixie = port(0x303a, 0x0002);
+    const jtag = port(0x303a, 0x1001);
+    const serial = {
+      getPorts: vi.fn().mockResolvedValue([]),
+      requestPort: vi.fn().mockResolvedValue(jtag),
+    };
+
+    const result = await resolveDownloadPort(pixie, { serial, wait: async () => {} });
+
+    expect(serial.requestPort).toHaveBeenCalledWith({ filters: [DOWNLOAD_PORT_FILTER] });
+    expect(result).toBe(jtag);
+  });
+
+  it('reports an unauthorized download port when the picker cannot open', async () => {
+    const pixie = port(0x303a, 0x0002);
+    const serial = {
+      getPorts: vi.fn().mockResolvedValue([]),
+      requestPort: vi.fn().mockRejectedValue(new DOMException('No gesture', 'SecurityError')),
+    };
+
+    await expect(resolveDownloadPort(pixie, {
+      serial,
+      wait: async () => {},
+      timeoutMs: 500,
+    })).rejects.toBeInstanceOf(DownloadPortNotAuthorizedError);
   });
 });

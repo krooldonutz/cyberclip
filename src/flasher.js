@@ -10,26 +10,51 @@ const RESET_SEQUENCES = {
 };
 
 export const ESPRESSIF_USB_VENDOR_ID = 0x303a;
+export const ESP32S3_RTC_CNTL_OPTION1_REG = 0x6000812c;
+export const ESP32S3_RTC_CNTL_FORCE_DOWNLOAD_BOOT = 0x1;
 export const USB_JTAG_SERIAL_PRODUCT_ID = 0x1001;
+export const DOWNLOAD_PORT_FILTER = Object.freeze({
+  usbVendorId: ESPRESSIF_USB_VENDOR_ID,
+  usbProductId: USB_JTAG_SERIAL_PRODUCT_ID,
+});
+export const DOWNLOAD_PORT_NOT_AUTHORIZED_MESSAGE =
+  'The board restarted into download mode. Select Install firmware again and choose "USB JTAG/serial debug unit".';
+// How long to wait for an already-authorized download port before asking the
+// user to pick it (the click that started the install is still active then).
+const AUTHORIZED_PORT_WAIT_MS = 2500;
 const DOWNLOAD_PORT_TIMEOUT_MS = 10000;
 const DOWNLOAD_PORT_POLL_MS = 250;
 
 const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
-function isDownloadPort(port) {
-  const info = port.getInfo?.() ?? {};
+export function isDownloadPort(port) {
+  const info = port?.getInfo?.() ?? {};
   return info.usbVendorId === ESPRESSIF_USB_VENDOR_ID
     && info.usbProductId === USB_JTAG_SERIAL_PRODUCT_ID;
+}
+
+export class DownloadPortNotAuthorizedError extends Error {
+  constructor() {
+    super(DOWNLOAD_PORT_NOT_AUTHORIZED_MESSAGE);
+    this.name = 'DownloadPortNotAuthorizedError';
+  }
+}
+
+async function findAuthorizedDownloadPort(serial) {
+  const ports = await serial?.getPorts?.() ?? [];
+  return ports.find(isDownloadPort) ?? null;
 }
 
 // Firmware running TinyUSB on the native USB port (e.g. "Pixie Pixel Gear" on
 // the T-Display-S3) cannot be reset over RTS/DTR. Opening it at 1200 baud
 // makes it reboot into ROM download mode, where the chip re-enumerates as its
-// built-in USB-Serial/JTAG unit.
+// built-in USB-Serial/JTAG unit. Web Serial permissions are per device and
+// origin, so that unit may need to be picked by the user once.
 export async function resolveDownloadPort(port, {
   serial = globalThis.navigator?.serial,
   onStatus = () => {},
   wait = sleep,
+  authorizedWaitMs = AUTHORIZED_PORT_WAIT_MS,
   timeoutMs = DOWNLOAD_PORT_TIMEOUT_MS,
 } = {}) {
   const info = port.getInfo?.() ?? {};
@@ -45,18 +70,39 @@ export async function resolveDownloadPort(port, {
   }
   await port.close().catch(() => {});
 
-  for (let waited = 0; waited < timeoutMs; waited += DOWNLOAD_PORT_POLL_MS) {
+  let waited = 0;
+  for (; waited < authorizedWaitMs; waited += DOWNLOAD_PORT_POLL_MS) {
     await wait(DOWNLOAD_PORT_POLL_MS);
-    const ports = await serial?.getPorts?.() ?? [];
-    const downloadPort = ports.find(isDownloadPort);
+    const downloadPort = await findAuthorizedDownloadPort(serial);
     if (downloadPort) {
       await wait(500);
       return downloadPort;
     }
   }
-  throw new Error(
-    'The board restarted into download mode. Select Install firmware again and choose "USB JTAG/serial debug unit".',
-  );
+
+  if (serial?.requestPort) {
+    onStatus('Choose "USB JTAG/serial debug unit" to continue');
+    try {
+      const picked = await serial.requestPort({ filters: [DOWNLOAD_PORT_FILTER] });
+      if (isDownloadPort(picked)) {
+        await wait(500);
+        return picked;
+      }
+    } catch {
+      // The picker needs a recent click; fall back to waiting, then asking
+      // the user to select Install firmware again.
+    }
+  }
+
+  for (; waited < timeoutMs; waited += DOWNLOAD_PORT_POLL_MS) {
+    await wait(DOWNLOAD_PORT_POLL_MS);
+    const downloadPort = await findAuthorizedDownloadPort(serial);
+    if (downloadPort) {
+      await wait(500);
+      return downloadPort;
+    }
+  }
+  throw new DownloadPortNotAuthorizedError();
 }
 
 export async function flashBundledFirmware({
@@ -124,7 +170,21 @@ export async function flashBundledFirmware({
     });
     onProgress(100);
     onStatus(`Resetting ${chipName}`);
-    await loader.after('custom_reset', false, RESET_SEQUENCES[chipName] ?? RESET_SEQUENCES.ESP32);
+    if (chipName === 'ESP32-S3') {
+      // A 1200-baud reboot sets FORCE_DOWNLOAD_BOOT, which survives a reset;
+      // clear it or the board boots straight back into download mode.
+      await loader.writeReg(
+        ESP32S3_RTC_CNTL_OPTION1_REG,
+        0,
+        ESP32S3_RTC_CNTL_FORCE_DOWNLOAD_BOOT,
+      );
+    }
+    try {
+      await loader.after('custom_reset', false, RESET_SEQUENCES[chipName] ?? RESET_SEQUENCES.ESP32);
+    } catch {
+      // On native USB the port disappears as soon as the chip resets, so the
+      // rest of the sequence fails; the firmware is already written.
+    }
     return { ...manifest, chip: chipName, board: build.board };
   } finally {
     await serialTransport.disconnect().catch(() => {});

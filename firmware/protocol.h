@@ -178,6 +178,42 @@ inline uint16_t uploadProgressPixels(uint16_t width, uint16_t frameCount,
       (static_cast<uint64_t>(width) * completedUnits) / totalUnits);
 }
 
+// Above this the reading is dominated by USB/charger voltage, not the cell.
+constexpr uint16_t kBatteryExternalPowerMillivolts = 4350;
+
+enum BatteryLevel : uint8_t {
+  BATTERY_LOW = 1,
+  BATTERY_MEDIUM = 2,
+  BATTERY_HIGH = 3,
+};
+
+// Approximate single-cell LiPo open-circuit discharge curve.
+inline uint8_t batteryPercentFromMillivolts(uint32_t millivolts) {
+  static constexpr uint16_t kCurve[][2] = {
+      {3300, 0},  {3450, 5},  {3550, 10}, {3650, 20}, {3700, 30}, {3750, 40},
+      {3800, 50}, {3900, 65}, {4000, 80}, {4100, 90}, {4200, 100},
+  };
+  constexpr size_t kPoints = sizeof(kCurve) / sizeof(kCurve[0]);
+  if (millivolts <= kCurve[0][0]) return 0;
+  if (millivolts >= kCurve[kPoints - 1][0]) return 100;
+  for (size_t i = 1; i < kPoints; ++i) {
+    if (millivolts <= kCurve[i][0]) {
+      const uint32_t v0 = kCurve[i - 1][0];
+      const uint32_t v1 = kCurve[i][0];
+      const uint32_t p0 = kCurve[i - 1][1];
+      const uint32_t p1 = kCurve[i][1];
+      return static_cast<uint8_t>(p0 + (p1 - p0) * (millivolts - v0) / (v1 - v0));
+    }
+  }
+  return 100;
+}
+
+inline BatteryLevel batteryLevelFromPercent(uint8_t percent) {
+  if (percent >= 67) return BATTERY_HIGH;
+  if (percent >= 34) return BATTERY_MEDIUM;
+  return BATTERY_LOW;
+}
+
 inline size_t playlistMetadataSize(uint8_t frameCount) {
   return kPlaylistMetadataHeaderSize +
          static_cast<size_t>(frameCount) * sizeof(uint16_t) +

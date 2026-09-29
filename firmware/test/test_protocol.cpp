@@ -86,8 +86,25 @@ void test_hotspot_validation_and_fallback_policy() {
       shouldRunHotspot(HOTSPOT_FALLBACK, true, true, 20000, 15000));
 }
 
+void test_battery_percent_and_level() {
+  TEST_ASSERT_EQUAL_UINT8(0, batteryPercentFromMillivolts(0));
+  TEST_ASSERT_EQUAL_UINT8(0, batteryPercentFromMillivolts(3300));
+  TEST_ASSERT_EQUAL_UINT8(50, batteryPercentFromMillivolts(3800));
+  TEST_ASSERT_EQUAL_UINT8(57, batteryPercentFromMillivolts(3850));
+  TEST_ASSERT_EQUAL_UINT8(100, batteryPercentFromMillivolts(4200));
+  TEST_ASSERT_EQUAL_UINT8(100, batteryPercentFromMillivolts(5000));
+
+  TEST_ASSERT_EQUAL_UINT8(BATTERY_LOW, batteryLevelFromPercent(0));
+  TEST_ASSERT_EQUAL_UINT8(BATTERY_LOW, batteryLevelFromPercent(33));
+  TEST_ASSERT_EQUAL_UINT8(BATTERY_MEDIUM, batteryLevelFromPercent(34));
+  TEST_ASSERT_EQUAL_UINT8(BATTERY_MEDIUM, batteryLevelFromPercent(66));
+  TEST_ASSERT_EQUAL_UINT8(BATTERY_HIGH, batteryLevelFromPercent(67));
+  TEST_ASSERT_EQUAL_UINT8(BATTERY_HIGH, batteryLevelFromPercent(100));
+}
+
 void runTests() {
   UNITY_BEGIN();
+  RUN_TEST(test_battery_percent_and_level);
   RUN_TEST(test_crc_standard_vector);
   RUN_TEST(test_little_endian_helpers);
   RUN_TEST(test_upload_progress_pixels);
