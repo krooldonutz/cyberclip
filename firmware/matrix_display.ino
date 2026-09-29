@@ -163,7 +163,7 @@ constexpr uint32_t kSleepButtonDebounceMs = 30;
 constexpr uint32_t kHotspotButtonHoldMs = 1500;
 constexpr uint8_t kFirmwareMajor = 2;
 constexpr uint8_t kFirmwareMinor = 0;
-constexpr uint8_t kFirmwarePatch = 17;
+constexpr uint8_t kFirmwarePatch = 18;
 using board::kDeviceName;
 constexpr char kMetadataPath[] = "/playlist.meta";
 constexpr char kMetadataTempPath[] = "/playlist.tmp";
@@ -285,7 +285,18 @@ void restoreActiveOrClear(uint8_t fallbackRotation) {
   display.fillScreen(TFT_BLACK);
 }
 
+void waitForButtonsReleased() {
+  uint32_t releasedSince = millis();
+  while (millis() - releasedSince < 50) {
+    for (gpio_num_t button : kButtons) {
+      if (digitalRead(button) == LOW) releasedSince = millis();
+    }
+    delay(1);
+  }
+}
+
 void enterDeepSleep() {
+  waitForButtonsReleased();
   display.setBrightness(0);
   display.sleep();
   Serial.flush();
@@ -305,21 +316,24 @@ void enterDeepSleep() {
   gpio_deep_sleep_hold_en();
 #endif
 
-  esp_sleep_enable_ext0_wakeup(kSleepButton, LOW);
 #if defined(CYBERCLIP_BOARD_LILYGO_T_DISPLAY_S3)
-  // ext1 isolates its pads (dropping the pull-ups) unless RTC_PERIPH is
-  // explicitly kept on; a floating GPIO14 would wake the board immediately.
+  // In deep sleep the button pads are RTC-muxed, where the digital pull-ups
+  // no longer apply. Enable the RTC pull-ups on every button and keep
+  // RTC_PERIPH powered so they (and the pads) are not isolated; otherwise a
+  // floating pad reads low and wakes the board immediately.
   esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
-  uint64_t extraWakeMask = 0;
-  for (size_t i = 0; i < kButtonCount; ++i) {
-    if (kButtons[i] == kSleepButton) continue;
-    rtc_gpio_pullup_en(kButtons[i]);
-    rtc_gpio_pulldown_dis(kButtons[i]);
-    extraWakeMask |= 1ULL << kButtons[i];
+  uint64_t wakeMask = 0;
+  for (gpio_num_t button : kButtons) {
+    rtc_gpio_init(button);
+    rtc_gpio_set_direction(button, RTC_GPIO_MODE_INPUT_ONLY);
+    rtc_gpio_pulldown_dis(button);
+    rtc_gpio_pullup_en(button);
+    wakeMask |= 1ULL << button;
   }
-  if (extraWakeMask) {
-    esp_sleep_enable_ext1_wakeup(extraWakeMask, ESP_EXT1_WAKEUP_ANY_LOW);
-  }
+  delay(5);
+  esp_sleep_enable_ext1_wakeup(wakeMask, ESP_EXT1_WAKEUP_ANY_LOW);
+#else
+  esp_sleep_enable_ext0_wakeup(kSleepButton, LOW);
 #endif
   esp_deep_sleep_start();
 }
