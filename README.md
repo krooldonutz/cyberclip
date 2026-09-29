@@ -51,9 +51,18 @@ its own.
 
 The **BOOT** (GPIO0) button works as on the ideaspark board: a short press
 enters deep sleep, holding for 1.5 seconds toggles the hotspot, and pressing it
-again wakes the board. The second user button (GPIO14) is currently unused. If
+again wakes the board. If
 the board is not detected for flashing, hold **BOOT**, press **RST**, then
 release **BOOT** to enter download mode.
+
+Pressing the second user button (GPIO14) shows a battery indicator in the
+top-right corner, on top of whatever is on screen. It shows a three-bar battery
+(red = low, yellow = medium, green = high) and the estimated percentage. The
+indicator stays up while the button is held and disappears 3 seconds after the
+button is released. The percentage is estimated from the battery voltage, which
+the board reads on GPIO4 through a 2:1 divider. The charge state is not wired
+to a GPIO, so when USB power is present the indicator shows **USB** instead of
+a percentage.
 
 To reduce steady-state power consumption and heat without compromising display
 updates, the firmware runs the ESP32 at 160 MHz, enables WiFi station modem

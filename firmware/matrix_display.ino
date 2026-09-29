@@ -24,6 +24,11 @@ constexpr int kReset = 5;
 constexpr int kBacklight = 38;
 // Gates LCD power; must be driven high when running from the battery.
 constexpr int kLcdPower = 15;
+// Battery sense through a 2:1 divider (ADC1), and the second user button.
+constexpr int kBatteryAdc = 4;
+constexpr int kBatteryDivider = 2;
+constexpr int kBatteryButton = 14;
+#define CYBERCLIP_HAS_BATTERY 1
 constexpr uint16_t kWidth = 170;
 constexpr uint16_t kHeight = 320;
 
@@ -152,7 +157,7 @@ constexpr uint32_t kConservativeStoredBytes = 8 * 1024 * 1024;
 constexpr uint32_t kParserTimeoutMs = 1000;
 constexpr uint16_t kMinimumFrameDelayMs = 10;
 constexpr gpio_num_t kSleepButton = GPIO_NUM_0;
-// The T-Display-S3's second button (GPIO14) is intentionally left unused.
+// On the T-Display-S3, GPIO14 shows the battery overlay (see pollBatteryButton).
 constexpr gpio_num_t kButtons[] = {kSleepButton};
 constexpr size_t kButtonCount = sizeof(kButtons) / sizeof(kButtons[0]);
 constexpr uint32_t kSleepButtonDebounceMs = 30;
@@ -231,6 +236,221 @@ enum class ReplyTarget { kSerial, kWebSocket };
 ReplyTarget currentReplyTarget = ReplyTarget::kSerial;
 
 bool startStoredPlayback();
+bool decodeJpegBuffer(uint8_t *data, uint32_t size, uint16_t width,
+                      uint16_t height, uint8_t rotation, bool render);
+bool renderPlaylistFrame(const Playlist &playlist, uint16_t frameIndex);
+
+// Tracks what is on screen so a temporary overlay can be removed afterwards.
+enum class ScreenContent : uint8_t { kFill, kPlaylistFrame, kLiveFrame, kProgress };
+struct ScreenState {
+  ScreenContent content = ScreenContent::kFill;
+  uint16_t fillColor = 0;
+  uint8_t generation = 0;
+  uint16_t playlistFrame = 0;
+} screen;
+
+#if defined(CYBERCLIP_HAS_BATTERY)
+constexpr uint32_t kBatteryOverlayMs = 3000;
+constexpr uint8_t kBatterySamples = 16;
+constexpr int16_t kBatteryOverlayMargin = 4;
+constexpr int16_t kBatteryOverlayWidth = 66;
+constexpr int16_t kBatteryOverlayHeight = 22;
+
+// Last live (non-stored) frame, kept so it can be redrawn under the overlay.
+struct LiveFrame {
+  uint8_t *data = nullptr;
+  uint32_t size = 0;
+  uint16_t width = 0;
+  uint16_t height = 0;
+  uint8_t rotation = 0;
+} liveFrame;
+
+struct BatteryOverlay {
+  bool visible = false;
+  uint32_t shownAt = 0;
+  uint32_t millivolts = 0;
+  uint8_t rotation = 0;
+} batteryOverlay;
+
+struct {
+  bool armed = false;
+  bool pressed = false;
+} batteryButton;
+
+void releaseLiveFrame() {
+  free(liveFrame.data);
+  liveFrame = LiveFrame{};
+}
+
+uint32_t readBatteryMillivolts() {
+  uint32_t total = 0;
+  for (uint8_t i = 0; i < kBatterySamples; ++i) {
+    total += analogReadMilliVolts(board::kBatteryAdc);
+  }
+  return total / kBatterySamples * board::kBatteryDivider;
+}
+
+int16_t batteryOverlayX() {
+  return display.width() - kBatteryOverlayWidth - kBatteryOverlayMargin;
+}
+
+void drawBatteryOverlay() {
+  batteryOverlay.rotation = display.getRotation();
+  const int16_t x = batteryOverlayX();
+  const int16_t y = kBatteryOverlayMargin;
+  const bool externalPower =
+      batteryOverlay.millivolts >= kBatteryExternalPowerMillivolts;
+  const uint8_t percent = batteryPercentFromMillivolts(batteryOverlay.millivolts);
+  const BatteryLevel level =
+      externalPower ? BATTERY_HIGH : batteryLevelFromPercent(percent);
+  const uint16_t levelColor = level == BATTERY_HIGH     ? TFT_GREEN
+                              : level == BATTERY_MEDIUM ? TFT_YELLOW
+                                                        : TFT_RED;
+
+  display.startWrite();
+  display.fillRoundRect(x, y, kBatteryOverlayWidth, kBatteryOverlayHeight, 4,
+                        TFT_BLACK);
+  display.drawRoundRect(x, y, kBatteryOverlayWidth, kBatteryOverlayHeight, 4,
+                        TFT_DARKGREY);
+
+  constexpr int16_t kBodyWidth = 24;
+  constexpr int16_t kBodyHeight = 12;
+  constexpr int16_t kSegmentWidth = 6;
+  const int16_t bodyX = x + 5;
+  const int16_t bodyY = y + (kBatteryOverlayHeight - kBodyHeight) / 2;
+  display.drawRect(bodyX, bodyY, kBodyWidth, kBodyHeight, TFT_WHITE);
+  display.fillRect(bodyX + kBodyWidth, bodyY + 3, 2, kBodyHeight - 6, TFT_WHITE);
+  for (uint8_t i = 0; i < 3; ++i) {
+    display.fillRect(bodyX + 2 + i * (kSegmentWidth + 1), bodyY + 2,
+                     kSegmentWidth, kBodyHeight - 4,
+                     i < level ? levelColor : TFT_BLACK);
+  }
+
+  char label[8];
+  if (externalPower) snprintf(label, sizeof(label), "USB");
+  else snprintf(label, sizeof(label), "%u%%", static_cast<unsigned>(percent));
+  display.setTextSize(1);
+  display.setTextColor(TFT_WHITE, TFT_BLACK);
+  display.setTextDatum(middle_left);
+  display.drawString(label, bodyX + kBodyWidth + 6, y + kBatteryOverlayHeight / 2);
+  display.setTextDatum(top_left);
+  display.endWrite();
+}
+
+void showBatteryOverlay() {
+  if (screen.content == ScreenContent::kProgress) return;
+  batteryOverlay.millivolts = readBatteryMillivolts();
+  batteryOverlay.visible = true;
+  batteryOverlay.shownAt = millis();
+  drawBatteryOverlay();
+}
+
+void hideBatteryOverlay() {
+  if (!batteryOverlay.visible) return;
+  batteryOverlay.visible = false;
+  switch (screen.content) {
+    case ScreenContent::kPlaylistFrame:
+      if (activePlaylist.valid &&
+          activePlaylist.generation == screen.generation &&
+          renderPlaylistFrame(activePlaylist, screen.playlistFrame)) {
+        return;
+      }
+      break;
+    case ScreenContent::kLiveFrame:
+      if (liveFrame.data &&
+          decodeJpegBuffer(liveFrame.data, liveFrame.size, liveFrame.width,
+                           liveFrame.height, liveFrame.rotation, true)) {
+        return;
+      }
+      break;
+    case ScreenContent::kProgress:
+      return;
+    case ScreenContent::kFill:
+      break;
+  }
+  display.setRotation(batteryOverlay.rotation);
+  display.fillRect(batteryOverlayX(), kBatteryOverlayMargin,
+                   kBatteryOverlayWidth, kBatteryOverlayHeight,
+                   screen.content == ScreenContent::kFill ? screen.fillColor
+                                                          : TFT_BLACK);
+}
+
+void pollBatteryButton() {
+  const bool pressed = digitalRead(board::kBatteryButton) == LOW;
+  if (!batteryButton.armed) {
+    if (!pressed) batteryButton.armed = true;
+    return;
+  }
+  if (pressed && !batteryButton.pressed) {
+    delay(kSleepButtonDebounceMs);
+    if (digitalRead(board::kBatteryButton) != LOW) return;
+    batteryButton.pressed = true;
+    showBatteryOverlay();
+    return;
+  }
+  if (!pressed && batteryButton.pressed) {
+    delay(kSleepButtonDebounceMs);
+    if (digitalRead(board::kBatteryButton) == LOW) return;
+    batteryButton.pressed = false;
+  }
+}
+
+void pollBatteryOverlay() {
+  // The overlay stays up while the button is held.
+  if (batteryOverlay.visible && !batteryButton.pressed &&
+      millis() - batteryOverlay.shownAt >= kBatteryOverlayMs) {
+    hideBatteryOverlay();
+  }
+}
+#endif
+
+void onScreenChanged() {
+#if defined(CYBERCLIP_HAS_BATTERY)
+  if (screen.content != ScreenContent::kLiveFrame) releaseLiveFrame();
+  if (screen.content == ScreenContent::kProgress) {
+    batteryOverlay.visible = false;
+  } else if (batteryOverlay.visible) {
+    drawBatteryOverlay();
+  }
+#endif
+}
+
+void markScreenFill(uint16_t color) {
+  screen = ScreenState{};
+  screen.fillColor = color;
+  onScreenChanged();
+}
+
+void markScreenPlaylistFrame(uint8_t generation, uint16_t frameIndex) {
+  screen = ScreenState{};
+  screen.content = ScreenContent::kPlaylistFrame;
+  screen.generation = generation;
+  screen.playlistFrame = frameIndex;
+  onScreenChanged();
+}
+
+// Called right after a live transfer was rendered; may take ownership of its
+// JPEG buffer so the frame can be redrawn later.
+void markScreenLiveFrame() {
+#if defined(CYBERCLIP_HAS_BATTERY)
+  releaseLiveFrame();
+  liveFrame.data = transfer.data;
+  liveFrame.size = transfer.total;
+  liveFrame.width = transfer.width;
+  liveFrame.height = transfer.height;
+  liveFrame.rotation = transfer.rotation;
+  transfer.data = nullptr;
+#endif
+  screen = ScreenState{};
+  screen.content = ScreenContent::kLiveFrame;
+  onScreenChanged();
+}
+
+void markScreenProgress() {
+  screen = ScreenState{};
+  screen.content = ScreenContent::kProgress;
+  onScreenChanged();
+}
 
 void showUploadProgress(uint8_t rotation) {
   display.setRotation(rotation);
@@ -247,6 +467,7 @@ void showUploadProgress(uint8_t rotation) {
   display.setCursor(labelX > 0 ? labelX : 0,
                     uploadProgress.y - display.fontHeight() - 10);
   display.print(kProgressLabel);
+  markScreenProgress();
   display.drawRect(uploadProgress.x, uploadProgress.y, width, kProgressHeight,
                    kProgressBorderColor);
   display.drawRect(uploadProgress.x + 1, uploadProgress.y + 1, width - 2,
@@ -279,6 +500,7 @@ void restoreActiveOrClear(uint8_t fallbackRotation) {
   if (activePlaylist.valid && startStoredPlayback()) return;
   display.setRotation(fallbackRotation);
   display.fillScreen(TFT_BLACK);
+  markScreenFill(TFT_BLACK);
 }
 
 void waitForButtonsReleased() {
@@ -348,6 +570,8 @@ void showHotspotButtonFeedback(uint8_t previousMode) {
     display.drawString("Set AP password", display.width() / 2,
                        display.height() / 2);
   }
+  display.setTextDatum(top_left);
+  markScreenFill(TFT_BLACK);
 }
 
 void pollButton(gpio_num_t pin, ButtonState &button) {
@@ -554,6 +778,7 @@ bool renderPlaylistFrame(const Playlist &playlist, uint16_t frameIndex) {
   const bool rendered =
       decodeJpegBuffer(data, size, width, height, playlist.rotation, true);
   free(data);
+  if (rendered) markScreenPlaylistFrame(playlist.generation, frameIndex);
   return rendered;
 }
 
@@ -945,6 +1170,8 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
         sendNack(sequence, command, DECODE_FAILED);
         releaseTransfer();
         return;
+      } else {
+        markScreenLiveFrame();
       }
       sendAck(sequence, command);
       releaseTransfer();
@@ -986,7 +1213,9 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
       if (length != 0 && length != 2) {
         sendNack(sequence, command, INVALID_PAYLOAD);
       } else {
-        display.fillScreen(length ? readLe16(payload) : 0);
+        const uint16_t color = length ? readLe16(payload) : 0;
+        display.fillScreen(color);
+        markScreenFill(color);
         sendAck(sequence, command);
       }
       return;
@@ -1303,6 +1532,10 @@ void setup() {
 #if CONFIG_IDF_TARGET_ESP32S3
   gpio_deep_sleep_hold_dis();
 #endif
+#if defined(CYBERCLIP_HAS_BATTERY)
+  pinMode(board::kBatteryButton, INPUT_PULLUP);
+  analogSetPinAttenuation(board::kBatteryAdc, ADC_11db);
+#endif
   gpio_hold_dis(static_cast<gpio_num_t>(board::kBacklight));
   if (board::kLcdPower >= 0) {
     gpio_hold_dis(static_cast<gpio_num_t>(board::kLcdPower));
@@ -1339,5 +1572,9 @@ void loop() {
   wsServerPoll();
   advanceStoredPlayback();
   pollButtons();
+#if defined(CYBERCLIP_HAS_BATTERY)
+  pollBatteryButton();
+  pollBatteryOverlay();
+#endif
   yield();
 }
