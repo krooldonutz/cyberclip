@@ -1,5 +1,9 @@
 import './styles.css';
-import { flashBundledFirmware } from './flasher.js';
+import {
+  ESPRESSIF_USB_VENDOR_ID,
+  USB_JTAG_SERIAL_PRODUCT_ID,
+  flashBundledFirmware,
+} from './flasher.js';
 import { decodeGif, iterateGifFrames } from './gifs.js';
 import { encodeSourceForDisplay, prepareImageFile } from './images.js';
 import {
@@ -213,11 +217,17 @@ async function installFirmware() {
         setProgress(elements['transfer-progress'].value, message);
       },
     });
-    log(`Installed Cyberclip firmware ${manifest.version}`);
+    const target = manifest.board ?? manifest.chip;
+    log(`Installed Cyberclip firmware ${manifest.version}${target ? ` for ${target}` : ''}`);
     setProgress(100, 'Firmware installed');
-    await abortableDelay(1000);
     activeTransport = serialTransport;
-    await serialTransport.connect({ port });
+    if (manifest.chip === 'ESP32-S3') {
+      // The native USB port re-enumerates as a new "Pixie Pixel Gear" device.
+      await reconnectNativeUsb();
+    } else {
+      await abortableDelay(1000);
+      await serialTransport.connect({ port });
+    }
   } catch (error) {
     const message = error.name === 'NotFoundError'
       ? 'No serial device was selected'
@@ -226,6 +236,27 @@ async function installFirmware() {
     setProgress(0, 'Firmware installation failed');
     setState('disconnected');
   }
+}
+
+async function reconnectNativeUsb() {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    await abortableDelay(1000);
+    const ports = (await navigator.serial.getPorts()).filter((candidate) => {
+      const info = candidate.getInfo?.() ?? {};
+      return info.usbVendorId === ESPRESSIF_USB_VENDOR_ID
+        && info.usbProductId !== USB_JTAG_SERIAL_PRODUCT_ID;
+    });
+    for (const candidate of ports) {
+      try {
+        await serialTransport.connect({ port: candidate });
+        return;
+      } catch {
+        // Try the next port or wait for the board to finish booting.
+      }
+    }
+  }
+  log('Firmware installed. Select Connect and choose "Pixie Pixel Gear" to finish.');
+  setState('disconnected');
 }
 
 async function connectUsb() {

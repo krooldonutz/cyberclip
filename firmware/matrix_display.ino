@@ -12,6 +12,32 @@
 #include "src/wifi_manager.h"
 #include "src/ws_server.h"
 
+#if defined(CYBERCLIP_BOARD_LILYGO_T_DISPLAY_S3)
+namespace board {
+// LilyGO T-Display-S3: ESP32-S3 with a 1.9" ST7789 on an 8-bit i8080 bus.
+constexpr int kData[8] = {39, 40, 41, 42, 45, 46, 47, 48};
+constexpr int kWr = 8;
+constexpr int kRd = 9;
+constexpr int kDc = 7;
+constexpr int kCs = 6;
+constexpr int kReset = 5;
+constexpr int kBacklight = 38;
+// Gates LCD power; must be driven high when running from the battery.
+constexpr int kLcdPower = 15;
+constexpr uint16_t kWidth = 170;
+constexpr uint16_t kHeight = 320;
+
+constexpr uint16_t kControllerWidth = 240;
+constexpr uint16_t kControllerHeight = 320;
+constexpr uint16_t kOffsetX = 35;
+constexpr uint16_t kOffsetY = 0;
+constexpr bool kInvert = true;
+constexpr bool kRgbOrder = false;
+constexpr uint32_t kBusFrequency = 20000000;
+constexpr uint8_t kBacklightPwmChannel = 7;
+constexpr char kDeviceName[] = "CyberClip LilyGO T-Display-S3 ST7789";
+}  // namespace board
+#else
 namespace board {
 constexpr int kMosi = 23;
 constexpr int kSclk = 18;
@@ -19,6 +45,7 @@ constexpr int kCs = 15;
 constexpr int kDc = 2;
 constexpr int kReset = 4;
 constexpr int kBacklight = 32;
+constexpr int kLcdPower = -1;
 constexpr uint16_t kWidth = 170;
 constexpr uint16_t kHeight = 320;
 
@@ -31,11 +58,32 @@ constexpr bool kInvert = true;
 constexpr bool kRgbOrder = false;
 constexpr uint32_t kSpiFrequency = 80000000;
 constexpr uint8_t kBacklightPwmChannel = 7;
+constexpr char kDeviceName[] = "CyberClip Ideaspark ESP32 ST7789";
 }  // namespace board
+#endif
 
 class MatrixDisplay : public lgfx::LGFX_Device {
  public:
   MatrixDisplay() {
+#if defined(CYBERCLIP_BOARD_LILYGO_T_DISPLAY_S3)
+    {
+      auto cfg = bus_.config();
+      cfg.freq_write = board::kBusFrequency;
+      cfg.pin_wr = board::kWr;
+      cfg.pin_rd = board::kRd;
+      cfg.pin_rs = board::kDc;
+      cfg.pin_d0 = board::kData[0];
+      cfg.pin_d1 = board::kData[1];
+      cfg.pin_d2 = board::kData[2];
+      cfg.pin_d3 = board::kData[3];
+      cfg.pin_d4 = board::kData[4];
+      cfg.pin_d5 = board::kData[5];
+      cfg.pin_d6 = board::kData[6];
+      cfg.pin_d7 = board::kData[7];
+      bus_.config(cfg);
+      panel_.setBus(&bus_);
+    }
+#else
     {
       auto cfg = bus_.config();
       cfg.spi_host = VSPI_HOST;
@@ -52,6 +100,7 @@ class MatrixDisplay : public lgfx::LGFX_Device {
       bus_.config(cfg);
       panel_.setBus(&bus_);
     }
+#endif
     {
       auto cfg = panel_.config();
       cfg.pin_cs = board::kCs;
@@ -84,7 +133,11 @@ class MatrixDisplay : public lgfx::LGFX_Device {
   }
 
  private:
+#if defined(CYBERCLIP_BOARD_LILYGO_T_DISPLAY_S3)
+  lgfx::Bus_Parallel8 bus_;
+#else
   lgfx::Bus_SPI bus_;
+#endif
   lgfx::Panel_ST7789 panel_;
   lgfx::Light_PWM light_;
 };
@@ -99,12 +152,15 @@ constexpr uint32_t kConservativeStoredBytes = 8 * 1024 * 1024;
 constexpr uint32_t kParserTimeoutMs = 1000;
 constexpr uint16_t kMinimumFrameDelayMs = 10;
 constexpr gpio_num_t kSleepButton = GPIO_NUM_0;
+// The T-Display-S3's second button (GPIO14) is intentionally left unused.
+constexpr gpio_num_t kButtons[] = {kSleepButton};
+constexpr size_t kButtonCount = sizeof(kButtons) / sizeof(kButtons[0]);
 constexpr uint32_t kSleepButtonDebounceMs = 30;
 constexpr uint32_t kHotspotButtonHoldMs = 1500;
 constexpr uint8_t kFirmwareMajor = 2;
 constexpr uint8_t kFirmwareMinor = 0;
-constexpr uint8_t kFirmwarePatch = 14;
-constexpr char kDeviceName[] = "CyberClip Ideaspark ESP32 ST7789";
+constexpr uint8_t kFirmwarePatch = 20;
+using board::kDeviceName;
 constexpr char kMetadataPath[] = "/playlist.meta";
 constexpr char kMetadataTempPath[] = "/playlist.tmp";
 constexpr char kProgressLabel[] = "Media is being loaded";
@@ -160,10 +216,12 @@ struct UploadProgress {
 uint8_t backlight = 128;
 bool renderToDisplay = false;
 bool filesystemMounted = false;
-bool sleepButtonArmed = false;
-bool sleepButtonPressed = false;
-bool sleepButtonLongHandled = false;
-uint32_t sleepButtonPressedAt = 0;
+struct ButtonState {
+  bool armed = false;
+  bool pressed = false;
+  bool longHandled = false;
+  uint32_t pressedAt = 0;
+} buttonStates[kButtonCount];
 
 // Selects where writeFrame() sends its next reply. Set immediately before
 // feeding bytes into serialParser/wsParser in loop(), so it is always
@@ -223,7 +281,18 @@ void restoreActiveOrClear(uint8_t fallbackRotation) {
   display.fillScreen(TFT_BLACK);
 }
 
+void waitForButtonsReleased() {
+  uint32_t releasedSince = millis();
+  while (millis() - releasedSince < 50) {
+    for (gpio_num_t button : kButtons) {
+      if (digitalRead(button) == LOW) releasedSince = millis();
+    }
+    delay(1);
+  }
+}
+
 void enterDeepSleep() {
+  waitForButtonsReleased();
   display.setBrightness(0);
   display.sleep();
   Serial.flush();
@@ -231,8 +300,37 @@ void enterDeepSleep() {
   pinMode(board::kBacklight, OUTPUT);
   digitalWrite(board::kBacklight, LOW);
   gpio_hold_en(static_cast<gpio_num_t>(board::kBacklight));
+  if (board::kLcdPower >= 0) {
+    const gpio_num_t lcdPower = static_cast<gpio_num_t>(board::kLcdPower);
+    gpio_hold_dis(lcdPower);
+    pinMode(board::kLcdPower, OUTPUT);
+    digitalWrite(board::kLcdPower, LOW);
+    gpio_hold_en(lcdPower);
+  }
+#if CONFIG_IDF_TARGET_ESP32S3
+  // Digital (non-RTC) pad holds only persist into deep sleep when enabled.
+  gpio_deep_sleep_hold_en();
+#endif
 
+#if defined(CYBERCLIP_BOARD_LILYGO_T_DISPLAY_S3)
+  // In deep sleep the button pads are RTC-muxed, where the digital pull-ups
+  // no longer apply. Enable the RTC pull-ups on every button and keep
+  // RTC_PERIPH powered so they (and the pads) are not isolated; otherwise a
+  // floating pad reads low and wakes the board immediately.
+  esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+  uint64_t wakeMask = 0;
+  for (gpio_num_t button : kButtons) {
+    rtc_gpio_init(button);
+    rtc_gpio_set_direction(button, RTC_GPIO_MODE_INPUT_ONLY);
+    rtc_gpio_pulldown_dis(button);
+    rtc_gpio_pullup_en(button);
+    wakeMask |= 1ULL << button;
+  }
+  delay(5);
+  esp_sleep_enable_ext1_wakeup(wakeMask, ESP_EXT1_WAKEUP_ANY_LOW);
+#else
   esp_sleep_enable_ext0_wakeup(kSleepButton, LOW);
+#endif
   esp_deep_sleep_start();
 }
 
@@ -252,38 +350,50 @@ void showHotspotButtonFeedback(uint8_t previousMode) {
   }
 }
 
-void pollSleepButton() {
-  const bool pressed = digitalRead(kSleepButton) == LOW;
-  if (!sleepButtonArmed) {
-    if (!pressed) sleepButtonArmed = true;
+void pollButton(gpio_num_t pin, ButtonState &button) {
+  const bool pressed = digitalRead(pin) == LOW;
+  if (!button.armed) {
+    if (!pressed) button.armed = true;
     return;
   }
 
-  if (pressed && !sleepButtonPressed) {
+  if (pressed && !button.pressed) {
     delay(kSleepButtonDebounceMs);
-    if (digitalRead(kSleepButton) != LOW) return;
-    sleepButtonPressed = true;
-    sleepButtonLongHandled = false;
-    sleepButtonPressedAt = millis();
+    if (digitalRead(pin) != LOW) return;
+    button.pressed = true;
+    button.longHandled = false;
+    button.pressedAt = millis();
     return;
   }
 
-  if (pressed && sleepButtonPressed && !sleepButtonLongHandled &&
-      millis() - sleepButtonPressedAt >= kHotspotButtonHoldMs) {
+  if (pressed && button.pressed && !button.longHandled &&
+      millis() - button.pressedAt >= kHotspotButtonHoldMs) {
     const uint8_t previousMode = wifiManager.hotspotStatus().mode;
     wifiManager.toggleHotspotMode();
     showHotspotButtonFeedback(previousMode);
-    sleepButtonLongHandled = true;
+    button.longHandled = true;
     return;
   }
 
-  if (!pressed && sleepButtonPressed) {
+  if (!pressed && button.pressed) {
     delay(kSleepButtonDebounceMs);
-    if (digitalRead(kSleepButton) == LOW) return;
-    const bool wasLongPress = sleepButtonLongHandled;
-    sleepButtonPressed = false;
-    sleepButtonLongHandled = false;
+    if (digitalRead(pin) == LOW) return;
+    const bool wasLongPress = button.longHandled;
+    button.pressed = false;
+    button.longHandled = false;
     if (!wasLongPress) enterDeepSleep();
+  }
+}
+
+void pollButtons() {
+  for (size_t i = 0; i < kButtonCount; ++i) {
+    // Only one button is tracked at a time so holding both acts once.
+    bool otherPressed = false;
+    for (size_t j = 0; j < kButtonCount; ++j) {
+      if (j != i && buttonStates[j].pressed) otherPressed = true;
+    }
+    if (otherPressed) continue;
+    pollButton(kButtons[i], buttonStates[i]);
   }
 }
 
@@ -1186,9 +1296,19 @@ void setup() {
   setCpuFrequencyMhz(kCpuFrequencyMhz);
   Serial.setRxBufferSize(8192);
   Serial.begin(kSerialBaud);
-  rtc_gpio_deinit(kSleepButton);
-  pinMode(kSleepButton, INPUT_PULLUP);
+  for (gpio_num_t button : kButtons) {
+    rtc_gpio_deinit(button);
+    pinMode(button, INPUT_PULLUP);
+  }
+#if CONFIG_IDF_TARGET_ESP32S3
+  gpio_deep_sleep_hold_dis();
+#endif
   gpio_hold_dis(static_cast<gpio_num_t>(board::kBacklight));
+  if (board::kLcdPower >= 0) {
+    gpio_hold_dis(static_cast<gpio_num_t>(board::kLcdPower));
+    pinMode(board::kLcdPower, OUTPUT);
+    digitalWrite(board::kLcdPower, HIGH);
+  }
   display.init();
   display.setBrightness(backlight);
   display.setRotation(0);
@@ -1218,6 +1338,6 @@ void loop() {
   wifiManager.poll();
   wsServerPoll();
   advanceStoredPlayback();
-  pollSleepButton();
+  pollButtons();
   yield();
 }

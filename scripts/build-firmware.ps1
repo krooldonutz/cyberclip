@@ -210,12 +210,34 @@ $deviceBuildDirectory = Join-Path $repositoryRoot 'dist-device'
 $deviceWebHeaderPath = Join-Path $firmwareDirectory 'generated\device_web.h'
 $manifestPath = Join-Path $repositoryRoot 'public\firmware\manifest.json'
 $serviceWorkerPath = Join-Path $repositoryRoot 'public\service-worker.js'
-$buildDirectory = Join-Path $firmwareDirectory '.pio\build\ideaspark_esp32'
-$bootloaderPath = Join-Path $buildDirectory 'bootloader.bin'
-$partitionsPath = Join-Path $buildDirectory 'partitions.bin'
-$applicationPath = Join-Path $buildDirectory 'firmware.bin'
+$buildRoot = Join-Path $firmwareDirectory '.pio\build'
 $bootAppPath = Join-Path $platformCoreDirectory 'packages\framework-arduinoespressif32\tools\partitions\boot_app0.bin'
 $esptoolPath = Join-Path $platformCoreDirectory 'packages\tool-esptoolpy\esptool.py'
+
+# The first target is also published through the legacy top-level manifest
+# fields so older web app builds keep flashing the original ESP32 board.
+$firmwareTargets = @(
+  [pscustomobject]@{
+    Environment = 'ideaspark_esp32'
+    Chip = 'ESP32'
+    EsptoolChip = 'esp32'
+    Board = 'ideaspark ESP32 ST7789'
+    FileStem = 'cyberclip'
+    BootloaderOffset = 0x1000
+    FlashMode = 'dio'
+    FlashFreq = '40m'
+  },
+  [pscustomobject]@{
+    Environment = 'lilygo_t_display_s3'
+    Chip = 'ESP32-S3'
+    EsptoolChip = 'esp32s3'
+    Board = 'LilyGO T-Display-S3'
+    FileStem = 'cyberclip-lilygo-t-display-s3'
+    BootloaderOffset = 0x0
+    FlashMode = 'keep'
+    FlashFreq = 'keep'
+  }
+)
 
 foreach ($requiredPath in @($firmwareSourcePath, $deviceWebHeaderPath,
     $manifestPath, $serviceWorkerPath)) {
@@ -235,16 +257,26 @@ if ($requestedVersion -le $currentVersion) {
   throw "Version $Version must be newer than the current published version $currentVersion."
 }
 
-$oldWebPath = [string]$manifest.path
-if ($oldWebPath -notmatch '^/firmware/[^/]+\.bin$') {
-  throw "Manifest firmware path is invalid: $oldWebPath"
+$oldWebPaths = @([string]$manifest.path)
+if ($manifest.PSObject.Properties.Name -contains 'builds') {
+  $oldWebPaths += @($manifest.builds | ForEach-Object { [string]$_.path })
 }
-$oldBinaryPath = Join-Path $repositoryRoot ('public' + $oldWebPath.Replace('/', '\'))
-$newWebPath = "/firmware/cyberclip-$Version.bin"
-$newBinaryPath = Join-Path $repositoryRoot ('public' + $newWebPath.Replace('/', '\'))
-$temporaryBinaryPath = "$newBinaryPath.tmp"
-if (Test-Path -LiteralPath $newBinaryPath) {
-  throw "Refusing to overwrite existing release image: $newBinaryPath"
+$oldWebPaths = @($oldWebPaths | Select-Object -Unique)
+foreach ($oldWebPath in $oldWebPaths) {
+  if ($oldWebPath -notmatch '^/firmware/[^/]+\.bin$') {
+    throw "Manifest firmware path is invalid: $oldWebPath"
+  }
+}
+
+foreach ($target in $firmwareTargets) {
+  $webPath = "/firmware/$($target.FileStem)-$Version.bin"
+  $binaryPath = Join-Path $repositoryRoot ('public' + $webPath.Replace('/', '\'))
+  $target | Add-Member -NotePropertyName WebPath -NotePropertyValue $webPath
+  $target | Add-Member -NotePropertyName BinaryPath -NotePropertyValue $binaryPath
+  $target | Add-Member -NotePropertyName TemporaryPath -NotePropertyValue "$binaryPath.tmp"
+  if (Test-Path -LiteralPath $binaryPath) {
+    throw "Refusing to overwrite existing release image: $binaryPath"
+  }
 }
 
 $updatedFirmwareSource = Replace-SingleMatch $originalFirmwareSource `
@@ -271,7 +303,7 @@ try {
   Write-Host 'Building the embedded device web page...'
   Push-Location $repositoryRoot
   try {
-    & $npm.Source run build:device -- --outDir dist-device --emptyOutDir
+    & $npm.Source run build:device -- --outDir $deviceBuildDirectory --emptyOutDir
     if ($LASTEXITCODE -ne 0) {
       throw "Device web build failed with exit code $LASTEXITCODE."
     }
@@ -280,48 +312,85 @@ try {
   }
   Write-EmbeddedWebHeader $deviceBuildDirectory $deviceWebHeaderPath
 
-  Write-Host "Building Cyberclip firmware $Version..."
-  Push-Location $firmwareDirectory
-  try {
-    Invoke-Python @('-m', 'platformio', 'run', '-e', 'ideaspark_esp32')
-  } finally {
-    Pop-Location
-  }
-
-  foreach ($artifactPath in @($bootloaderPath, $partitionsPath, $applicationPath, $bootAppPath, $esptoolPath)) {
-    if (-not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) {
-      throw "Required build artifact not found: $artifactPath"
+  foreach ($target in $firmwareTargets) {
+    Write-Host "Building Cyberclip firmware $Version for $($target.Board)..."
+    Push-Location $firmwareDirectory
+    try {
+      Invoke-Python @('-m', 'platformio', 'run', '-e', $target.Environment)
+    } finally {
+      Pop-Location
     }
+
+    $buildDirectory = Join-Path $buildRoot $target.Environment
+    $bootloaderPath = Join-Path $buildDirectory 'bootloader.bin'
+    $partitionsPath = Join-Path $buildDirectory 'partitions.bin'
+    $applicationPath = Join-Path $buildDirectory 'firmware.bin'
+    foreach ($artifactPath in @($bootloaderPath, $partitionsPath, $applicationPath, $bootAppPath, $esptoolPath)) {
+      if (-not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) {
+        throw "Required build artifact not found: $artifactPath"
+      }
+    }
+
+    Remove-Item -LiteralPath $target.TemporaryPath -Force -ErrorAction SilentlyContinue
+    Write-Host "Merging $($target.Chip) bootloader, partitions, boot app, and application..."
+    $bootloaderOffset = '0x{0:x}' -f $target.BootloaderOffset
+    Invoke-Python @(
+      $esptoolPath, '--chip', $target.EsptoolChip, 'merge_bin',
+      '-o', $target.TemporaryPath,
+      '--flash_mode', $target.FlashMode,
+      '--flash_freq', $target.FlashFreq,
+      '--flash_size', '16MB',
+      $bootloaderOffset, $bootloaderPath,
+      '0x8000', $partitionsPath,
+      '0xe000', $bootAppPath,
+      '0x10000', $applicationPath
+    )
+
+    if ($target.FlashMode -eq 'keep' -and $target.FlashFreq -eq 'keep') {
+      Assert-EmbeddedFile $target.TemporaryPath $bootloaderPath $target.BootloaderOffset
+    }
+    if ($target.BootloaderOffset -eq 0) {
+      $header = New-Object byte[] 1
+      $stream = [System.IO.File]::OpenRead($target.TemporaryPath)
+      try { $null = $stream.Read($header, 0, 1) } finally { $stream.Dispose() }
+      if ($header[0] -ne 0xE9) {
+        throw "Merged $($target.Chip) image does not start with a bootloader."
+      }
+    }
+    Assert-EmbeddedFile $target.TemporaryPath $partitionsPath 0x8000
+    Assert-EmbeddedFile $target.TemporaryPath $bootAppPath 0xe000
+    Assert-EmbeddedFile $target.TemporaryPath $applicationPath 0x10000
+
+    $target | Add-Member -NotePropertyName Size -NotePropertyValue `
+      (Get-Item -LiteralPath $target.TemporaryPath).Length -Force
   }
 
-  Remove-Item -LiteralPath $temporaryBinaryPath -Force -ErrorAction SilentlyContinue
-  Write-Host 'Merging bootloader, partitions, boot app, and application...'
-  Invoke-Python @(
-    $esptoolPath, '--chip', 'esp32', 'merge_bin',
-    '-o', $temporaryBinaryPath,
-    '--flash_mode', 'dio',
-    '--flash_freq', '40m',
-    '--flash_size', '16MB',
-    '0x1000', $bootloaderPath,
-    '0x8000', $partitionsPath,
-    '0xe000', $bootAppPath,
-    '0x10000', $applicationPath
+  $legacyTarget = $firmwareTargets[0]
+  $manifestLines = @(
+    '{',
+    "  `"version`": `"$Version`",",
+    "  `"path`": `"$($legacyTarget.WebPath)`",",
+    '  "address": 0,',
+    "  `"size`": $($legacyTarget.Size),",
+    '  "builds": ['
   )
-
-  Assert-EmbeddedFile $temporaryBinaryPath $bootloaderPath 0x1000
-  Assert-EmbeddedFile $temporaryBinaryPath $partitionsPath 0x8000
-  Assert-EmbeddedFile $temporaryBinaryPath $bootAppPath 0xe000
-  Assert-EmbeddedFile $temporaryBinaryPath $applicationPath 0x10000
-
-  $binarySize = (Get-Item -LiteralPath $temporaryBinaryPath).Length
-    $updatedManifest = (@(
-      '{',
-      "  `"version`": `"$Version`",",
-      "  `"path`": `"$newWebPath`",",
-      '  "address": 0,',
-      "  `"size`": $binarySize",
-      '}'
-    ) -join [Environment]::NewLine) + [Environment]::NewLine
+  for ($index = 0; $index -lt $firmwareTargets.Count; $index++) {
+    $target = $firmwareTargets[$index]
+    $separator = if ($index -lt $firmwareTargets.Count - 1) { ',' } else { '' }
+    $manifestLines += @(
+      '    {',
+      "      `"chip`": `"$($target.Chip)`",",
+      "      `"board`": `"$($target.Board)`",",
+      "      `"path`": `"$($target.WebPath)`",",
+      '      "address": 0,',
+      "      `"size`": $($target.Size),",
+      "      `"flashMode`": `"$($target.FlashMode)`",",
+      "      `"flashFreq`": `"$($target.FlashFreq)`"",
+      "    }$separator"
+    )
+  }
+  $manifestLines += @('  ]', '}')
+  $updatedManifest = ($manifestLines -join [Environment]::NewLine) + [Environment]::NewLine
 
   $cacheMatch = [regex]::Match($originalServiceWorker, "const CACHE_NAME = 'cyberclip-v(\d+)';")
   if (-not $cacheMatch.Success) {
@@ -332,21 +401,35 @@ try {
     "const CACHE_NAME = 'cyberclip-v\d+';" `
     "const CACHE_NAME = 'cyberclip-v$nextCacheVersion';" `
     'service-worker cache version'
+  $updatedServiceWorker = [regex]::Replace($updatedServiceWorker,
+    "(?m)^[ \t]*'/firmware/[^']+\.bin',\r?\n", '')
+  $firmwareCacheEntries = ($firmwareTargets | ForEach-Object {
+      "  '$($_.WebPath)',"
+    }) -join "`n"
   $updatedServiceWorker = Replace-SingleMatch $updatedServiceWorker `
-    ([regex]::Escape("'$oldWebPath'")) `
-    "'$newWebPath'" `
-    'service-worker firmware path'
+    "(?m)^([ \t]*'/firmware/manifest\.json',)\r?\n" `
+    "`$1`n$firmwareCacheEntries`n" `
+    'service-worker firmware manifest entry'
 
-  Move-Item -LiteralPath $temporaryBinaryPath -Destination $newBinaryPath
+  foreach ($target in $firmwareTargets) {
+    Move-Item -LiteralPath $target.TemporaryPath -Destination $target.BinaryPath
+  }
   Write-Utf8File $manifestPath $updatedManifest
   Write-Utf8File $serviceWorkerPath $updatedServiceWorker
 
-  if ($oldBinaryPath -ne $newBinaryPath -and (Test-Path -LiteralPath $oldBinaryPath -PathType Leaf)) {
-    Remove-Item -LiteralPath $oldBinaryPath
+  $newBinaryPaths = @($firmwareTargets | ForEach-Object { $_.BinaryPath })
+  foreach ($oldWebPath in $oldWebPaths) {
+    $oldBinaryPath = Join-Path $repositoryRoot ('public' + $oldWebPath.Replace('/', '\'))
+    if ($newBinaryPaths -notcontains $oldBinaryPath -and
+        (Test-Path -LiteralPath $oldBinaryPath -PathType Leaf)) {
+      Remove-Item -LiteralPath $oldBinaryPath
+    }
   }
 
   $releaseCompleted = $true
-  Write-Host "Created $newWebPath ($binarySize bytes)."
+  foreach ($target in $firmwareTargets) {
+    Write-Host "Created $($target.WebPath) for $($target.Board) ($($target.Size) bytes)."
+  }
   Write-Host "Firmware $Version is ready for the web installer."
 } finally {
   if (-not $releaseCompleted) {
@@ -354,7 +437,9 @@ try {
     Write-Utf8File $deviceWebHeaderPath $originalDeviceWebHeader
     Write-Utf8File $manifestPath $originalManifest
     Write-Utf8File $serviceWorkerPath $originalServiceWorker
-    Remove-Item -LiteralPath $temporaryBinaryPath -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $newBinaryPath -Force -ErrorAction SilentlyContinue
+    foreach ($target in $firmwareTargets) {
+      Remove-Item -LiteralPath $target.TemporaryPath -Force -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath $target.BinaryPath -Force -ErrorAction SilentlyContinue
+    }
   }
 }

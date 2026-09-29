@@ -24,6 +24,37 @@ The current board profile uses the seller-reported display connections:
 
 Board revisions can differ. The current profile uses RGB panel order (`kRgbOrder = false`). Verify these pins, the 35-pixel horizontal panel offset, inversion, and RGB/BGR order against the example firmware supplied with your board before relying on the display.
 
+### LilyGO T-Display-S3
+
+The firmware is also built for the **LilyGO T-Display-S3** (ESP32-S3R8, 16 MB
+flash, 8 MB PSRAM, 1.9-inch 170×320 ST7789 on an 8-bit parallel bus). It uses
+the board's native USB port, so no CH340 driver is needed. The web installer
+detects the ESP32-S3 automatically and flashes the matching image; the display
+size, protocol, and web app are unchanged.
+
+Once Cyberclip is running, the board appears as **Pixie Pixel Gear** in the
+browser's serial-port picker (it uses TinyUSB with its own USB product name).
+To update it, choose **Pixie Pixel Gear**: the installer reboots the board into
+download mode, where it briefly shows up as **USB JTAG/serial debug unit**. If
+the browser has not been allowed to use that device yet, you will be asked to
+select **Install firmware** again and choose it. After installation, select
+**Connect** and choose **Pixie Pixel Gear** if the app does not reconnect on
+its own.
+
+| ST7789 signal | ESP32-S3 pin |
+|---|---:|
+| D0–D7 | GPIO39, 40, 41, 42, 45, 46, 47, 48 |
+| WR / RD | GPIO8 / GPIO9 |
+| DC / CS / Reset | GPIO7 / GPIO6 / GPIO5 |
+| Backlight | GPIO38 |
+| LCD power enable | GPIO15 |
+
+The **BOOT** (GPIO0) button works as on the ideaspark board: a short press
+enters deep sleep, holding for 1.5 seconds toggles the hotspot, and pressing it
+again wakes the board. The second user button (GPIO14) is currently unused. If
+the board is not detected for flashing, hold **BOOT**, press **RST**, then
+release **BOOT** to enter download mode.
+
 To reduce steady-state power consumption and heat without compromising display
 updates, the firmware runs the ESP32 at 160 MHz, enables WiFi station modem
 sleep, and starts the TFT backlight at 50%. The integrated display uses an
@@ -81,13 +112,15 @@ PowerShell command from the repository root:
 
 Python 3 is required. The script installs
 [PlatformIO Core](https://platformio.org/) with pip when needed, builds the
-firmware, merges all ESP32 boot components, updates the firmware manifest and
-service-worker cache, and removes the previously published binary. The version
+firmware for every supported board (`ideaspark_esp32` and
+`lilygo_t_display_s3`), merges each board's boot components into its own image,
+updates the firmware manifest and service-worker cache, and removes the
+previously published binaries. The version
 argument must be newer than the version in `public/firmware/manifest.json`.
 
 The firmware dependencies are pinned in `firmware/platformio.ini`.
 
-The web installer uses the prebuilt firmware image referenced by `public/firmware/manifest.json` and validates its metadata before flashing. It writes the bootloader, partition table, and application image without erasing the LittleFS media partition.
+The web installer reads `public/firmware/manifest.json`, detects the connected chip (ESP32 or ESP32-S3), and flashes the matching prebuilt image after validating its metadata. It writes the bootloader, partition table, and application image without erasing the LittleFS media partition.
 
 ## Quick start
 
