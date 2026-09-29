@@ -102,7 +102,7 @@ describe('bundled firmware flashing', () => {
       }))
       .mockResolvedValueOnce(response(firmware));
     const writeFlash = vi.fn().mockResolvedValue();
-    const after = vi.fn().mockResolvedValue();
+    const after = vi.fn().mockRejectedValue(new Error('Invalid custom reset sequence'));
     const writeReg = vi.fn().mockResolvedValue();
     class FakeLoader {
       chip = { CHIP_NAME: 'ESP32-S3' };

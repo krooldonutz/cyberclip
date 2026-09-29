@@ -179,7 +179,12 @@ export async function flashBundledFirmware({
         ESP32S3_RTC_CNTL_FORCE_DOWNLOAD_BOOT,
       );
     }
-    await loader.after('custom_reset', false, RESET_SEQUENCES[chipName] ?? RESET_SEQUENCES.ESP32);
+    try {
+      await loader.after('custom_reset', false, RESET_SEQUENCES[chipName] ?? RESET_SEQUENCES.ESP32);
+    } catch {
+      // On native USB the port disappears as soon as the chip resets, so the
+      // rest of the sequence fails; the firmware is already written.
+    }
     return { ...manifest, chip: chipName, board: build.board };
   } finally {
     await serialTransport.disconnect().catch(() => {});
