@@ -152,18 +152,14 @@ constexpr uint32_t kConservativeStoredBytes = 8 * 1024 * 1024;
 constexpr uint32_t kParserTimeoutMs = 1000;
 constexpr uint16_t kMinimumFrameDelayMs = 10;
 constexpr gpio_num_t kSleepButton = GPIO_NUM_0;
-#if defined(CYBERCLIP_BOARD_LILYGO_T_DISPLAY_S3)
-// GPIO14 (the second user button) mirrors BOOT.
-constexpr gpio_num_t kButtons[] = {kSleepButton, GPIO_NUM_14};
-#else
+// The T-Display-S3's second button (GPIO14) is intentionally left unused.
 constexpr gpio_num_t kButtons[] = {kSleepButton};
-#endif
 constexpr size_t kButtonCount = sizeof(kButtons) / sizeof(kButtons[0]);
 constexpr uint32_t kSleepButtonDebounceMs = 30;
 constexpr uint32_t kHotspotButtonHoldMs = 1500;
 constexpr uint8_t kFirmwareMajor = 2;
 constexpr uint8_t kFirmwareMinor = 0;
-constexpr uint8_t kFirmwarePatch = 18;
+constexpr uint8_t kFirmwarePatch = 19;
 using board::kDeviceName;
 constexpr char kMetadataPath[] = "/playlist.meta";
 constexpr char kMetadataTempPath[] = "/playlist.tmp";
