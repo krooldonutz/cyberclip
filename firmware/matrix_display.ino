@@ -152,11 +152,18 @@ constexpr uint32_t kConservativeStoredBytes = 8 * 1024 * 1024;
 constexpr uint32_t kParserTimeoutMs = 1000;
 constexpr uint16_t kMinimumFrameDelayMs = 10;
 constexpr gpio_num_t kSleepButton = GPIO_NUM_0;
+#if defined(CYBERCLIP_BOARD_LILYGO_T_DISPLAY_S3)
+// GPIO14 (the second user button) mirrors BOOT.
+constexpr gpio_num_t kButtons[] = {kSleepButton, GPIO_NUM_14};
+#else
+constexpr gpio_num_t kButtons[] = {kSleepButton};
+#endif
+constexpr size_t kButtonCount = sizeof(kButtons) / sizeof(kButtons[0]);
 constexpr uint32_t kSleepButtonDebounceMs = 30;
 constexpr uint32_t kHotspotButtonHoldMs = 1500;
 constexpr uint8_t kFirmwareMajor = 2;
 constexpr uint8_t kFirmwareMinor = 0;
-constexpr uint8_t kFirmwarePatch = 15;
+constexpr uint8_t kFirmwarePatch = 16;
 using board::kDeviceName;
 constexpr char kMetadataPath[] = "/playlist.meta";
 constexpr char kMetadataTempPath[] = "/playlist.tmp";
@@ -213,10 +220,12 @@ struct UploadProgress {
 uint8_t backlight = 128;
 bool renderToDisplay = false;
 bool filesystemMounted = false;
-bool sleepButtonArmed = false;
-bool sleepButtonPressed = false;
-bool sleepButtonLongHandled = false;
-uint32_t sleepButtonPressedAt = 0;
+struct ButtonState {
+  bool armed = false;
+  bool pressed = false;
+  bool longHandled = false;
+  uint32_t pressedAt = 0;
+} buttonStates[kButtonCount];
 
 // Selects where writeFrame() sends its next reply. Set immediately before
 // feeding bytes into serialParser/wsParser in loop(), so it is always
@@ -297,6 +306,19 @@ void enterDeepSleep() {
 #endif
 
   esp_sleep_enable_ext0_wakeup(kSleepButton, LOW);
+#if defined(CYBERCLIP_BOARD_LILYGO_T_DISPLAY_S3)
+  // ext0 keeps the RTC peripherals powered, so the RTC pull-ups stay active.
+  uint64_t extraWakeMask = 0;
+  for (size_t i = 0; i < kButtonCount; ++i) {
+    if (kButtons[i] == kSleepButton) continue;
+    rtc_gpio_pullup_en(kButtons[i]);
+    rtc_gpio_pulldown_dis(kButtons[i]);
+    extraWakeMask |= 1ULL << kButtons[i];
+  }
+  if (extraWakeMask) {
+    esp_sleep_enable_ext1_wakeup(extraWakeMask, ESP_EXT1_WAKEUP_ANY_LOW);
+  }
+#endif
   esp_deep_sleep_start();
 }
 
@@ -316,38 +338,50 @@ void showHotspotButtonFeedback(uint8_t previousMode) {
   }
 }
 
-void pollSleepButton() {
-  const bool pressed = digitalRead(kSleepButton) == LOW;
-  if (!sleepButtonArmed) {
-    if (!pressed) sleepButtonArmed = true;
+void pollButton(gpio_num_t pin, ButtonState &button) {
+  const bool pressed = digitalRead(pin) == LOW;
+  if (!button.armed) {
+    if (!pressed) button.armed = true;
     return;
   }
 
-  if (pressed && !sleepButtonPressed) {
+  if (pressed && !button.pressed) {
     delay(kSleepButtonDebounceMs);
-    if (digitalRead(kSleepButton) != LOW) return;
-    sleepButtonPressed = true;
-    sleepButtonLongHandled = false;
-    sleepButtonPressedAt = millis();
+    if (digitalRead(pin) != LOW) return;
+    button.pressed = true;
+    button.longHandled = false;
+    button.pressedAt = millis();
     return;
   }
 
-  if (pressed && sleepButtonPressed && !sleepButtonLongHandled &&
-      millis() - sleepButtonPressedAt >= kHotspotButtonHoldMs) {
+  if (pressed && button.pressed && !button.longHandled &&
+      millis() - button.pressedAt >= kHotspotButtonHoldMs) {
     const uint8_t previousMode = wifiManager.hotspotStatus().mode;
     wifiManager.toggleHotspotMode();
     showHotspotButtonFeedback(previousMode);
-    sleepButtonLongHandled = true;
+    button.longHandled = true;
     return;
   }
 
-  if (!pressed && sleepButtonPressed) {
+  if (!pressed && button.pressed) {
     delay(kSleepButtonDebounceMs);
-    if (digitalRead(kSleepButton) == LOW) return;
-    const bool wasLongPress = sleepButtonLongHandled;
-    sleepButtonPressed = false;
-    sleepButtonLongHandled = false;
+    if (digitalRead(pin) == LOW) return;
+    const bool wasLongPress = button.longHandled;
+    button.pressed = false;
+    button.longHandled = false;
     if (!wasLongPress) enterDeepSleep();
+  }
+}
+
+void pollButtons() {
+  for (size_t i = 0; i < kButtonCount; ++i) {
+    // Only one button is tracked at a time so holding both acts once.
+    bool otherPressed = false;
+    for (size_t j = 0; j < kButtonCount; ++j) {
+      if (j != i && buttonStates[j].pressed) otherPressed = true;
+    }
+    if (otherPressed) continue;
+    pollButton(kButtons[i], buttonStates[i]);
   }
 }
 
@@ -1250,8 +1284,10 @@ void setup() {
   setCpuFrequencyMhz(kCpuFrequencyMhz);
   Serial.setRxBufferSize(8192);
   Serial.begin(kSerialBaud);
-  rtc_gpio_deinit(kSleepButton);
-  pinMode(kSleepButton, INPUT_PULLUP);
+  for (gpio_num_t button : kButtons) {
+    rtc_gpio_deinit(button);
+    pinMode(button, INPUT_PULLUP);
+  }
 #if CONFIG_IDF_TARGET_ESP32S3
   gpio_deep_sleep_hold_dis();
 #endif
@@ -1290,6 +1326,6 @@ void loop() {
   wifiManager.poll();
   wsServerPoll();
   advanceStoredPlayback();
-  pollSleepButton();
+  pollButtons();
   yield();
 }

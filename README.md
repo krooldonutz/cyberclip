@@ -40,9 +40,10 @@ size, protocol, and web app are unchanged.
 | Backlight | GPIO38 |
 | LCD power enable | GPIO15 |
 
-The **BOOT** (GPIO0) button provides the same sleep and hotspot controls as on
-the ideaspark board. If the board is not detected for flashing, hold **BOOT**,
-press **RST**, then release **BOOT** to enter download mode.
+The **BOOT** (GPIO0) and second user button (GPIO14) behave identically: a
+short press enters deep sleep, holding for 1.5 seconds toggles the hotspot, and
+either button wakes the board. If the board is not detected for flashing, hold
+**BOOT**, press **RST**, then release **BOOT** to enter download mode.
 
 To reduce steady-state power consumption and heat without compromising display
 updates, the firmware runs the ESP32 at 160 MHz, enables WiFi station modem
