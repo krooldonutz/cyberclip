@@ -9,13 +9,65 @@ const RESET_SEQUENCES = {
   'ESP32-S3': 'D0|R1|W200|R0|W500',
 };
 
+export const ESPRESSIF_USB_VENDOR_ID = 0x303a;
+export const USB_JTAG_SERIAL_PRODUCT_ID = 0x1001;
+const DOWNLOAD_PORT_TIMEOUT_MS = 10000;
+const DOWNLOAD_PORT_POLL_MS = 250;
+
+const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+function isDownloadPort(port) {
+  const info = port.getInfo?.() ?? {};
+  return info.usbVendorId === ESPRESSIF_USB_VENDOR_ID
+    && info.usbProductId === USB_JTAG_SERIAL_PRODUCT_ID;
+}
+
+// Firmware running TinyUSB on the native USB port (e.g. "Pixie Pixel Gear" on
+// the T-Display-S3) cannot be reset over RTS/DTR. Opening it at 1200 baud
+// makes it reboot into ROM download mode, where the chip re-enumerates as its
+// built-in USB-Serial/JTAG unit.
+export async function resolveDownloadPort(port, {
+  serial = globalThis.navigator?.serial,
+  onStatus = () => {},
+  wait = sleep,
+  timeoutMs = DOWNLOAD_PORT_TIMEOUT_MS,
+} = {}) {
+  const info = port.getInfo?.() ?? {};
+  if (info.usbVendorId !== ESPRESSIF_USB_VENDOR_ID || isDownloadPort(port)) {
+    return port;
+  }
+
+  onStatus('Restarting the board into download mode');
+  try {
+    await port.open({ baudRate: 1200 });
+  } catch {
+    // The board may reboot before open() settles.
+  }
+  await port.close().catch(() => {});
+
+  for (let waited = 0; waited < timeoutMs; waited += DOWNLOAD_PORT_POLL_MS) {
+    await wait(DOWNLOAD_PORT_POLL_MS);
+    const ports = await serial?.getPorts?.() ?? [];
+    const downloadPort = ports.find(isDownloadPort);
+    if (downloadPort) {
+      await wait(500);
+      return downloadPort;
+    }
+  }
+  throw new Error(
+    'The board restarted into download mode. Select Install firmware again and choose "USB JTAG/serial debug unit".',
+  );
+}
+
 export async function flashBundledFirmware({
   port,
+  serial = globalThis.navigator?.serial,
   fetchImpl = globalThis.fetch,
   onProgress = () => {},
   onStatus = () => {},
   Loader = ESPLoader,
   SerialTransport = Transport,
+  wait = sleep,
 }) {
   if (!port) throw new Error('Choose an ESP32 serial device first');
   if (!fetchImpl) throw new Error('Firmware download is unavailable');
@@ -24,7 +76,8 @@ export async function flashBundledFirmware({
   const manifest = await fetchJson(fetchImpl, FIRMWARE_MANIFEST_URL);
   const builds = firmwareBuilds(manifest);
 
-  const serialTransport = new SerialTransport(port, false);
+  const flashPort = await resolveDownloadPort(port, { serial, onStatus, wait });
+  const serialTransport = new SerialTransport(flashPort, false);
   const loader = new Loader({
     transport: serialTransport,
     baudrate: 921600,

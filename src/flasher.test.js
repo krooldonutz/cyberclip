@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { flashBundledFirmware } from './flasher.js';
+import { flashBundledFirmware, resolveDownloadPort } from './flasher.js';
 
 function response(body, { ok = true, status = 200 } = {}) {
   return {
@@ -179,5 +179,49 @@ describe('bundled firmware flashing', () => {
       Loader: FakeLoader,
       SerialTransport: FakeTransport,
     })).rejects.toThrow('size is invalid');
+  });
+});
+
+describe('native USB download port', () => {
+  const port = (usbVendorId, usbProductId) => ({
+    getInfo: () => ({ usbVendorId, usbProductId }),
+    open: vi.fn().mockResolvedValue(),
+    close: vi.fn().mockResolvedValue(),
+  });
+
+  it('uses bridge and USB-Serial/JTAG ports directly', async () => {
+    const bridge = port(0x1a86, 0x7523);
+    const jtag = port(0x303a, 0x1001);
+    expect(await resolveDownloadPort(bridge)).toBe(bridge);
+    expect(await resolveDownloadPort(jtag)).toBe(jtag);
+    expect(bridge.open).not.toHaveBeenCalled();
+    expect(jtag.open).not.toHaveBeenCalled();
+  });
+
+  it('reboots TinyUSB firmware with a 1200 baud touch and returns the JTAG port', async () => {
+    const pixie = port(0x303a, 0x0002);
+    const jtag = port(0x303a, 0x1001);
+    const serial = {
+      getPorts: vi.fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([jtag]),
+    };
+
+    const result = await resolveDownloadPort(pixie, { serial, wait: async () => {} });
+
+    expect(pixie.open).toHaveBeenCalledWith({ baudRate: 1200 });
+    expect(pixie.close).toHaveBeenCalled();
+    expect(result).toBe(jtag);
+  });
+
+  it('asks the user to pick the download port when it is not authorized', async () => {
+    const pixie = port(0x303a, 0x0002);
+    const serial = { getPorts: vi.fn().mockResolvedValue([]) };
+
+    await expect(resolveDownloadPort(pixie, {
+      serial,
+      wait: async () => {},
+      timeoutMs: 500,
+    })).rejects.toThrow('USB JTAG/serial debug unit');
   });
 });

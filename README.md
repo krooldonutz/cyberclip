@@ -32,6 +32,15 @@ the board's native USB port, so no CH340 driver is needed. The web installer
 detects the ESP32-S3 automatically and flashes the matching image; the display
 size, protocol, and web app are unchanged.
 
+Once Cyberclip is running, the board appears as **Pixie Pixel Gear** in the
+browser's serial-port picker (it uses TinyUSB with its own USB product name).
+To update it, choose **Pixie Pixel Gear**: the installer reboots the board into
+download mode, where it briefly shows up as **USB JTAG/serial debug unit**. If
+the browser has not been allowed to use that device yet, you will be asked to
+select **Install firmware** again and choose it. After installation, select
+**Connect** and choose **Pixie Pixel Gear** if the app does not reconnect on
+its own.
+
 | ST7789 signal | ESP32-S3 pin |
 |---|---:|
 | D0–D7 | GPIO39, 40, 41, 42, 45, 46, 47, 48 |
