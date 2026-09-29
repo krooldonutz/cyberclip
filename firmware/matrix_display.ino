@@ -163,7 +163,7 @@ constexpr uint32_t kSleepButtonDebounceMs = 30;
 constexpr uint32_t kHotspotButtonHoldMs = 1500;
 constexpr uint8_t kFirmwareMajor = 2;
 constexpr uint8_t kFirmwareMinor = 0;
-constexpr uint8_t kFirmwarePatch = 16;
+constexpr uint8_t kFirmwarePatch = 17;
 using board::kDeviceName;
 constexpr char kMetadataPath[] = "/playlist.meta";
 constexpr char kMetadataTempPath[] = "/playlist.tmp";
@@ -307,7 +307,9 @@ void enterDeepSleep() {
 
   esp_sleep_enable_ext0_wakeup(kSleepButton, LOW);
 #if defined(CYBERCLIP_BOARD_LILYGO_T_DISPLAY_S3)
-  // ext0 keeps the RTC peripherals powered, so the RTC pull-ups stay active.
+  // ext1 isolates its pads (dropping the pull-ups) unless RTC_PERIPH is
+  // explicitly kept on; a floating GPIO14 would wake the board immediately.
+  esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
   uint64_t extraWakeMask = 0;
   for (size_t i = 0; i < kButtonCount; ++i) {
     if (kButtons[i] == kSleepButton) continue;
