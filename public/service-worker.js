@@ -1,4 +1,4 @@
-const CACHE_NAME = 'cyberclip-v30';
+const CACHE_NAME = 'cyberclip-v31';
 const APP_SHELL = [
   '/',
   '/index.html',
