@@ -152,6 +152,11 @@ using namespace cyberclip;
 namespace {
 constexpr uint32_t kSerialBaud = 921600;
 constexpr uint32_t kCpuFrequencyMhz = 160;
+// Battery-only clock for a static screen (WiFi still needs at least 80 MHz).
+constexpr uint32_t kReducedCpuFrequencyMhz = 80;
+// Time without protocol bytes before the CPU may drop to the reduced clock.
+constexpr uint32_t kFullSpeedHoldMs = 3000;
+constexpr uint32_t kPowerCheckIntervalMs = 5000;
 constexpr uint32_t kMaxFrameSize = 128 * 1024;
 constexpr uint32_t kConservativeStoredBytes = 8 * 1024 * 1024;
 constexpr uint32_t kParserTimeoutMs = 1000;
@@ -429,6 +434,68 @@ void pollBatteryOverlay() {
     hideBatteryOverlay();
   }
 }
+
+struct {
+  bool onBattery = false;
+  bool fullSpeed = true;
+  bool checked = false;
+  uint32_t checkedAt = 0;
+  uint32_t lastActivityAt = 0;
+} power;
+
+void setFullSpeed(bool fullSpeed) {
+  if (power.fullSpeed == fullSpeed) return;
+  setCpuFrequencyMhz(fullSpeed ? kCpuFrequencyMhz : kReducedCpuFrequencyMhz);
+  power.fullSpeed = fullSpeed;
+}
+
+// Called before protocol bytes are handled, so any decode or draw they
+// trigger already runs at full speed and WiFi is back before a WiFi command
+// is handled. Also restarts the WiFi idle timer.
+void noteActivity() {
+  power.lastActivityAt = millis();
+  setFullSpeed(true);
+  wifiManager.resume();
+}
+
+void updatePowerMode() {
+  const uint32_t now = millis();
+  const bool animating = playback.running || transfer.active ||
+                         batteryOverlay.visible || batteryButton.pressed;
+  // The ADC read takes well under a millisecond, so it runs only when the
+  // next GIF frame is far enough away that it cannot delay it. A GIF that
+  // never leaves that slack still gets a read every few intervals.
+  const bool hasSlack =
+      !transfer.active &&
+      loopIdleSleepMs(false, playback.running,
+                      static_cast<int32_t>(playback.deadline - now)) > 0;
+  const uint32_t sinceCheck = now - power.checkedAt;
+  if (!power.checked ||
+      (hasSlack && sinceCheck >= kPowerCheckIntervalMs) ||
+      sinceCheck >= kPowerCheckIntervalMs * 6) {
+    const bool wasOnBattery = power.onBattery;
+    power.onBattery = onBatteryPower(power.onBattery, readBatteryMillivolts());
+    // Plugging in or unplugging restarts the WiFi idle timer.
+    if (power.checked && power.onBattery != wasOnBattery) {
+      power.lastActivityAt = now;
+    }
+    power.checked = true;
+    power.checkedAt = now;
+  }
+  setFullSpeed(shouldRunAtFullSpeed(power.onBattery, animating,
+                                    now - power.lastActivityAt,
+                                    kFullSpeedHoldMs));
+
+  if (shouldSuspendWifi(power.onBattery, transfer.active,
+                        now - power.lastActivityAt, kWifiIdleTimeoutMs)) {
+    wifiManager.suspend();
+  } else if (!power.onBattery) {
+    wifiManager.resume();
+  }
+}
+#else
+void noteActivity() {}
+void updatePowerMode() {}
 #endif
 
 void onScreenChanged() {
@@ -583,22 +650,24 @@ void enterDeepSleep() {
   esp_deep_sleep_start();
 }
 
-void showHotspotButtonFeedback(uint8_t previousMode) {
-  const HotspotStatus status = wifiManager.hotspotStatus();
+void showButtonMessage(const char *message) {
   display.setRotation(0);
   display.fillScreen(TFT_BLACK);
   display.setTextColor(TFT_WHITE, TFT_BLACK);
   display.setTextDatum(middle_center);
   display.setTextSize(2);
-  if (status.mode != previousMode) {
-    display.drawString(status.mode == HOTSPOT_OFF ? "Hotspot off" : "Hotspot on",
-                       display.width() / 2, display.height() / 2);
-  } else {
-    display.drawString("Set AP password", display.width() / 2,
-                       display.height() / 2);
-  }
+  display.drawString(message, display.width() / 2, display.height() / 2);
   display.setTextDatum(top_left);
   markScreenFill(TFT_BLACK);
+}
+
+void showHotspotButtonFeedback(uint8_t previousMode) {
+  const HotspotStatus status = wifiManager.hotspotStatus();
+  if (status.mode != previousMode) {
+    showButtonMessage(status.mode == HOTSPOT_OFF ? "Hotspot off" : "Hotspot on");
+  } else {
+    showButtonMessage("Set AP password");
+  }
 }
 
 void pollButton(gpio_num_t pin, ButtonState &button) {
@@ -619,9 +688,16 @@ void pollButton(gpio_num_t pin, ButtonState &button) {
 
   if (pressed && button.pressed && !button.longHandled &&
       millis() - button.pressedAt >= kHotspotButtonHoldMs) {
-    const uint8_t previousMode = wifiManager.hotspotStatus().mode;
-    wifiManager.toggleHotspotMode();
-    showHotspotButtonFeedback(previousMode);
+    if (wifiManager.suspended()) {
+      // WiFi was turned off for being idle: bring it back as configured
+      // rather than changing the hotspot setting.
+      noteActivity();
+      showButtonMessage("WiFi on");
+    } else {
+      const uint8_t previousMode = wifiManager.hotspotStatus().mode;
+      wifiManager.toggleHotspotMode();
+      showHotspotButtonFeedback(previousMode);
+    }
     button.longHandled = true;
     return;
   }
@@ -1711,7 +1787,12 @@ void setup() {
 }
 
 void loop() {
+  bool busy = false;
   currentReplyTarget = ReplyTarget::kSerial;
+  if (Serial.available() > 0) {
+    busy = true;
+    noteActivity();
+  }
   while (Serial.available() > 0) {
     serialParser.feed(static_cast<uint8_t>(Serial.read()));
   }
@@ -1720,6 +1801,10 @@ void loop() {
   currentReplyTarget = ReplyTarget::kWebSocket;
   uint8_t wsByte;
   while (wsReadByte(&wsByte)) {
+    if (!busy) {
+      busy = true;
+      noteActivity();
+    }
     wsParser.feed(wsByte);
   }
   wsParser.pollTimeout();
@@ -1732,5 +1817,13 @@ void loop() {
   pollBatteryButton();
   pollBatteryOverlay();
 #endif
-  yield();
+  updatePowerMode();
+
+  // Sleeping lets the idle task halt the CPU between passes instead of
+  // spinning. Drawing has already finished, so this never splits a frame.
+  const uint32_t sleepMs = loopIdleSleepMs(
+      busy || transfer.active, playback.running,
+      static_cast<int32_t>(playback.deadline - millis()));
+  if (sleepMs > 0) delay(sleepMs);
+  else yield();
 }
