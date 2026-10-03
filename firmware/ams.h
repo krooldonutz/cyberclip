@@ -95,6 +95,17 @@ inline size_t utf8Boundary(const char *text, size_t length, size_t maxLength) {
   return end;
 }
 
+// Start of the UTF-8 character after the one at *position*.
+inline size_t utf8Next(const char *text, size_t length, size_t position) {
+  if (position >= length) return length;
+  ++position;
+  while (position < length &&
+         (static_cast<uint8_t>(text[position]) & 0xC0) == 0x80) {
+    ++position;
+  }
+  return position;
+}
+
 // Copies a value into a NUL-terminated buffer, cutting only at a UTF-8
 // character boundary. Returns true when the stored text changed.
 inline bool storeUtf8(char *destination, size_t capacity, const char *value,

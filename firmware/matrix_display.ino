@@ -240,6 +240,17 @@ struct ScreenState {
   uint16_t playlistFrame = 0;
 } screen;
 
+// Full-screen now-playing view (kNowPlayingFullScreen). While it is up,
+// `screen` keeps describing the media underneath, which comes back when the
+// music stops, and stored playback is paused.
+struct {
+  bool visible = false;
+  uint8_t rotation = 0;
+} nowPlayingScreen;
+
+// Stored GIF playback that is actually advancing on the panel.
+bool playbackActive() { return playback.running && !nowPlayingScreen.visible; }
+
 constexpr uint32_t kBatteryOverlayMs = 3000;
 constexpr uint8_t kBatterySamples = 16;
 constexpr int16_t kBatteryOverlayMargin = 4;
@@ -396,14 +407,14 @@ void noteActivity() {
 
 void updatePowerMode() {
   const uint32_t now = millis();
-  const bool animating = playback.running || transfer.active ||
+  const bool animating = playbackActive() || transfer.active ||
                          batteryOverlay.visible || batteryButton.pressed;
   // The ADC read takes well under a millisecond, so it runs only when the
   // next GIF frame is far enough away that it cannot delay it. A GIF that
   // never leaves that slack still gets a read every few intervals.
   const bool hasSlack =
       !transfer.active &&
-      loopIdleSleepMs(false, playback.running,
+      loopIdleSleepMs(false, playbackActive(),
                       static_cast<int32_t>(playback.deadline - now)) > 0;
   const uint32_t sinceCheck = now - power.checkedAt;
   if (!power.checked ||
@@ -430,31 +441,55 @@ void updatePowerMode() {
   }
 }
 
-// Banner along the bottom edge showing what the paired iPhone is playing.
-// It appears when a new track starts or playback resumes, then hides again.
+// What the paired iPhone is playing (src/ble_media.cpp) can be shown in
+// three ways. Each is a hardcoded switch; they can be combined.
+//
+// Banner with the battery indicator while GPIO14 is pressed.
+constexpr bool kNowPlayingOnButton = true;
+// Replace the photo or GIF with a now-playing screen while music plays. The
+// media comes back (and a GIF resumes) when playback pauses or stops.
+constexpr bool kNowPlayingFullScreen = true;
+// Banner for a few seconds whenever a track starts or playback resumes.
+constexpr bool kNowPlayingAutoBanner = false;
+
 constexpr uint32_t kNowPlayingOverlayMs = 6000;
 // iOS sends the title and artist as separate notifications; waiting briefly
-// keeps the banner from showing the new title with the old artist.
+// keeps the screen from showing the new title with the old artist.
 constexpr uint32_t kNowPlayingSettleMs = 300;
 constexpr int16_t kNowPlayingMargin = 4;
 constexpr int16_t kNowPlayingHeight = 34;
 constexpr int16_t kNowPlayingIconWidth = 18;
 constexpr uint16_t kNowPlayingArtistColor = 0xBDF7;  // light grey
 const lgfx::IFont *const kNowPlayingFont = &fonts::efontJA_12;
+const lgfx::IFont *const kNowPlayingTitleFont = &fonts::efontJA_16;
+constexpr uint8_t kNowPlayingScreenIconScale = 3;
+constexpr uint8_t kNowPlayingScreenTitleLines = 3;
+constexpr uint8_t kNowPlayingScreenArtistLines = 2;
+constexpr int16_t kNowPlayingScreenPadding = 10;
+constexpr size_t kFittedTextSize = kNowPlayingTextSize + 3;
 
 struct {
   bool visible = false;
+  // Shown by the GPIO14 button, so it hides together with the battery
+  // indicator rather than on its own timer.
+  bool onButton = false;
   bool pending = false;
   uint32_t seenRevision = 0;
   uint32_t changedAt = 0;
   uint32_t shownAt = 0;
   uint8_t rotation = 0;
   NowPlaying latest;
-  // What the banner last announced, so unrelated updates do not re-show it.
+  // What was last announced, so unrelated updates do not re-show it.
   char shownTitle[kNowPlayingTextSize] = {};
   char shownArtist[kNowPlayingTextSize] = {};
   bool wasPlaying = false;
+  bool buttonWasPressed = false;
 } nowPlayingOverlay;
+
+bool nowPlayingIsPlaying(const NowPlaying &info) {
+  return info.connected && info.playback == ams::PLAYBACK_PLAYING &&
+         info.title[0] != '\0';
+}
 
 int16_t nowPlayingOverlayY() {
   return display.height() - kNowPlayingHeight - kNowPlayingMargin;
@@ -464,29 +499,94 @@ int16_t nowPlayingOverlayWidth() {
   return display.width() - kNowPlayingMargin * 2;
 }
 
-// Draws *text* left-aligned within *maxWidth*, ending it with "..." if it
-// does not fit. Cuts only between UTF-8 characters.
-void drawFittedText(const char *text, int16_t x, int16_t y, int16_t maxWidth) {
-  char fitted[kNowPlayingTextSize + 3];
-  size_t length = strlen(text);
-  if (display.textWidth(text) <= maxWidth) {
-    display.drawString(text, x, y);
-    return;
-  }
+// Copies *text* into *out*, ending it with "..." if it is wider than
+// *maxWidth* in the current font. Cuts only between UTF-8 characters.
+void fitText(const char *text, size_t length, int16_t maxWidth, char *out) {
+  length = ams::utf8Boundary(text, length, kNowPlayingTextSize - 1);
+  memcpy(out, text, length);
+  out[length] = '\0';
+  if (display.textWidth(out) <= maxWidth) return;
   const int16_t ellipsisWidth = display.textWidth("...");
   while (length > 0) {
-    length = ams::utf8Boundary(text, strlen(text), length - 1);
-    memcpy(fitted, text, length);
-    fitted[length] = '\0';
-    if (display.textWidth(fitted) + ellipsisWidth <= maxWidth) break;
+    length = ams::utf8Boundary(text, length, length - 1);
+    out[length] = '\0';
+    if (display.textWidth(out) + ellipsisWidth <= maxWidth) break;
   }
-  memcpy(fitted + length, "...", 4);
+  memcpy(out + length, "...", 4);
+}
+
+void drawFittedText(const char *text, int16_t x, int16_t y, int16_t maxWidth) {
+  char fitted[kFittedTextSize];
+  fitText(text, strlen(text), maxWidth, fitted);
   display.drawString(fitted, x, y);
+}
+
+// Splits *text* into at most *maxLines* lines no wider than *maxWidth*,
+// breaking at spaces where possible; the last line ends with "..." if text
+// is left over. Returns the number of lines.
+uint8_t wrapText(const char *text, int16_t maxWidth, uint8_t maxLines,
+                 char lines[][kFittedTextSize]) {
+  const size_t length = strlen(text);
+  size_t position = 0;
+  uint8_t count = 0;
+  char candidate[kFittedTextSize];
+  while (position < length && count < maxLines) {
+    while (position < length && text[position] == ' ') ++position;
+    if (position >= length) break;
+    const char *rest = text + position;
+    const size_t restLength = length - position;
+    if (count + 1 == maxLines) {
+      fitText(rest, restLength, maxWidth, lines[count++]);
+      break;
+    }
+    // Longest prefix that fits, and the last space within it.
+    size_t fits = 0;
+    size_t lastSpace = 0;
+    for (size_t next = ams::utf8Next(rest, restLength, 0);;
+         next = ams::utf8Next(rest, restLength, next)) {
+      if (next >= kFittedTextSize) break;
+      memcpy(candidate, rest, next);
+      candidate[next] = '\0';
+      if (display.textWidth(candidate) > maxWidth) break;
+      fits = next;
+      if (next < restLength && rest[next] == ' ') lastSpace = next;
+      if (next >= restLength) break;
+    }
+    if (fits == 0) fits = ams::utf8Next(rest, restLength, 0);
+    const size_t take =
+        (fits < restLength && lastSpace > 0) ? lastSpace : fits;
+    memcpy(lines[count], rest, take);
+    lines[count++][take] = '\0';
+    position += take;
+  }
+  return count;
+}
+
+// A beamed pair of eighth notes, (12 * scale + scale) x (15 * scale).
+void drawNoteIcon(int16_t x, int16_t y, uint8_t scale, uint16_t color) {
+  const int16_t s = scale;
+  display.fillCircle(x + 2 * s, y + 13 * s, 2 * s, color);
+  display.fillCircle(x + 10 * s, y + 11 * s, 2 * s, color);
+  display.fillRect(x + 4 * s, y + 2 * s, s, 11 * s, color);
+  display.fillRect(x + 12 * s, y, s, 11 * s, color);
+  display.fillTriangle(x + 4 * s, y + 2 * s, x + 13 * s, y, x + 13 * s,
+                       y + 2 * s, color);
+  display.fillTriangle(x + 4 * s, y + 2 * s, x + 13 * s, y + 2 * s, x + 4 * s,
+                       y + 4 * s, color);
 }
 
 void drawNowPlayingOverlay() {
   nowPlayingOverlay.rotation = display.getRotation();
   const NowPlaying &info = nowPlayingOverlay.latest;
+  const char *title = info.title;
+  const char *artist = info.artist;
+  if (!info.connected) {
+    title = "iPhone not connected";
+    artist = "Pair in Settings > Bluetooth";
+  } else if (title[0] == '\0') {
+    title = "Nothing playing";
+    artist = "";
+  }
   const int16_t x = kNowPlayingMargin;
   const int16_t y = nowPlayingOverlayY();
   const int16_t width = nowPlayingOverlayWidth();
@@ -494,16 +594,7 @@ void drawNowPlayingOverlay() {
   display.startWrite();
   display.fillRoundRect(x, y, width, kNowPlayingHeight, 4, TFT_BLACK);
   display.drawRoundRect(x, y, width, kNowPlayingHeight, 4, TFT_DARKGREY);
-
-  // A beamed pair of eighth notes.
-  const int16_t noteX = x + 5;
-  const int16_t noteY = y + kNowPlayingHeight / 2;
-  display.fillCircle(noteX + 2, noteY + 5, 2, TFT_WHITE);
-  display.fillCircle(noteX + 10, noteY + 3, 2, TFT_WHITE);
-  display.drawFastVLine(noteX + 4, noteY - 6, 11, TFT_WHITE);
-  display.drawFastVLine(noteX + 12, noteY - 8, 11, TFT_WHITE);
-  display.drawLine(noteX + 4, noteY - 6, noteX + 12, noteY - 8, TFT_WHITE);
-  display.drawLine(noteX + 4, noteY - 5, noteX + 12, noteY - 7, TFT_WHITE);
+  drawNoteIcon(x + 4, y + (kNowPlayingHeight - 15) / 2, 1, TFT_WHITE);
 
   const int16_t textX = x + 4 + kNowPlayingIconWidth;
   const int16_t textWidth = width - (textX - x) - 4;
@@ -511,42 +602,128 @@ void drawNowPlayingOverlay() {
   display.setTextSize(1);
   display.setTextDatum(top_left);
   display.setTextColor(TFT_WHITE, TFT_BLACK);
-  drawFittedText(info.title, textX, y + 4, textWidth);
+  drawFittedText(title, textX, y + 4, textWidth);
   display.setTextColor(kNowPlayingArtistColor, TFT_BLACK);
-  drawFittedText(info.artist, textX, y + 18, textWidth);
+  drawFittedText(artist, textX, y + 18, textWidth);
   display.setFont(&fonts::Font0);
   display.endWrite();
 }
 
-void showNowPlayingOverlay() {
+void showNowPlayingOverlay(bool onButton) {
   if (screen.content == ScreenContent::kProgress) return;
   nowPlayingOverlay.visible = true;
+  nowPlayingOverlay.onButton = onButton;
   nowPlayingOverlay.shownAt = millis();
-  drawNowPlayingOverlay();
+  // The full-screen view already shows the same information.
+  if (!nowPlayingScreen.visible) drawNowPlayingOverlay();
 }
 
 void hideNowPlayingOverlay() {
+  nowPlayingOverlay.onButton = false;
   if (!nowPlayingOverlay.visible) return;
   nowPlayingOverlay.visible = false;
+  if (nowPlayingScreen.visible) return;
   display.setRotation(nowPlayingOverlay.rotation);
   restoreUnderOverlay(kNowPlayingMargin, nowPlayingOverlayY(),
                       nowPlayingOverlayWidth(), kNowPlayingHeight,
                       nowPlayingOverlay.rotation);
 }
 
+void drawNowPlayingScreen() {
+  display.setRotation(nowPlayingScreen.rotation);
+  const NowPlaying &info = nowPlayingOverlay.latest;
+  const int16_t width = display.width();
+  const int16_t textWidth = width - kNowPlayingScreenPadding * 2;
+  char titleLines[kNowPlayingScreenTitleLines][kFittedTextSize];
+  char artistLines[kNowPlayingScreenArtistLines][kFittedTextSize];
+
+  display.setTextSize(1);
+  display.setFont(kNowPlayingTitleFont);
+  const uint8_t titleCount = wrapText(info.title, textWidth,
+                                      kNowPlayingScreenTitleLines, titleLines);
+  const int16_t titleLineHeight = display.fontHeight() + 2;
+  display.setFont(kNowPlayingFont);
+  const uint8_t artistCount = wrapText(
+      info.artist, textWidth, kNowPlayingScreenArtistLines, artistLines);
+  const int16_t artistLineHeight = display.fontHeight() + 2;
+
+  constexpr int16_t kIconWidth = 13 * kNowPlayingScreenIconScale;
+  constexpr int16_t kIconHeight = 15 * kNowPlayingScreenIconScale;
+  const int16_t blockHeight = kIconHeight + 14 + titleCount * titleLineHeight +
+                              (artistCount ? 6 : 0) +
+                              artistCount * artistLineHeight;
+  int16_t y = (display.height() - blockHeight) / 2;
+
+  display.startWrite();
+  display.fillScreen(TFT_BLACK);
+  drawNoteIcon((width - kIconWidth) / 2, y, kNowPlayingScreenIconScale,
+               TFT_WHITE);
+  y += kIconHeight + 14;
+  display.setTextDatum(top_center);
+  display.setFont(kNowPlayingTitleFont);
+  display.setTextColor(TFT_WHITE, TFT_BLACK);
+  for (uint8_t i = 0; i < titleCount; ++i, y += titleLineHeight) {
+    display.drawString(titleLines[i], width / 2, y);
+  }
+  y += 6;
+  display.setFont(kNowPlayingFont);
+  display.setTextColor(kNowPlayingArtistColor, TFT_BLACK);
+  for (uint8_t i = 0; i < artistCount; ++i, y += artistLineHeight) {
+    display.drawString(artistLines[i], width / 2, y);
+  }
+  display.setTextDatum(top_left);
+  display.setFont(&fonts::Font0);
+  display.endWrite();
+}
+
+void showNowPlayingScreen() {
+  // Uploads keep their progress screen.
+  if (screen.content == ScreenContent::kProgress || transfer.active) return;
+  if (!nowPlayingScreen.visible) {
+    nowPlayingScreen.rotation = display.getRotation();
+    nowPlayingScreen.visible = true;
+  }
+  drawNowPlayingScreen();
+  drawOverlays();
+}
+
+void hideNowPlayingScreen() {
+  if (!nowPlayingScreen.visible) return;
+  nowPlayingScreen.visible = false;
+  display.setRotation(nowPlayingScreen.rotation);
+  restoreUnderOverlay(0, 0, display.width(), display.height(),
+                      nowPlayingScreen.rotation);
+}
+
+// Runs after pollBatteryOverlay(), so the button banner appears and hides
+// together with the battery indicator.
+void pollNowPlayingButton() {
+  const bool pressed = batteryButton.pressed;
+  if (pressed && !nowPlayingOverlay.buttonWasPressed &&
+      batteryOverlay.visible) {
+    nowPlayingOverlay.latest = bleMedia.snapshot();
+    showNowPlayingOverlay(true);
+  } else if (nowPlayingOverlay.onButton && !batteryOverlay.visible) {
+    hideNowPlayingOverlay();
+  }
+  nowPlayingOverlay.buttonWasPressed = pressed;
+}
+
 void pollNowPlaying() {
+  if (kNowPlayingOnButton) pollNowPlayingButton();
   const uint32_t now = millis();
   const uint32_t revision = bleMedia.revision();
   if (revision != nowPlayingOverlay.seenRevision) {
     nowPlayingOverlay.seenRevision = revision;
     nowPlayingOverlay.latest = bleMedia.snapshot();
     const NowPlaying &info = nowPlayingOverlay.latest;
-    const bool playing = info.connected &&
-                         info.playback == ams::PLAYBACK_PLAYING &&
-                         info.title[0] != '\0';
+    const bool playing = nowPlayingIsPlaying(info);
     if (!playing) {
       nowPlayingOverlay.pending = false;
-      hideNowPlayingOverlay();
+      if (kNowPlayingAutoBanner && !nowPlayingOverlay.onButton) {
+        hideNowPlayingOverlay();
+      }
+      if (kNowPlayingFullScreen) hideNowPlayingScreen();
     } else if (!nowPlayingOverlay.wasPlaying ||
                strcmp(info.title, nowPlayingOverlay.shownTitle) != 0 ||
                strcmp(info.artist, nowPlayingOverlay.shownArtist) != 0) {
@@ -554,6 +731,11 @@ void pollNowPlaying() {
       nowPlayingOverlay.changedAt = now;
     }
     nowPlayingOverlay.wasPlaying = playing;
+    // A button banner follows whatever the iPhone reports while it is up.
+    if (nowPlayingOverlay.visible && nowPlayingOverlay.onButton &&
+        !nowPlayingScreen.visible) {
+      drawNowPlayingOverlay();
+    }
   }
 
   if (nowPlayingOverlay.pending &&
@@ -561,8 +743,13 @@ void pollNowPlaying() {
     nowPlayingOverlay.pending = false;
     strcpy(nowPlayingOverlay.shownTitle, nowPlayingOverlay.latest.title);
     strcpy(nowPlayingOverlay.shownArtist, nowPlayingOverlay.latest.artist);
-    showNowPlayingOverlay();
-  } else if (nowPlayingOverlay.visible &&
+    if (kNowPlayingFullScreen) {
+      showNowPlayingScreen();
+    } else if (kNowPlayingAutoBanner && !nowPlayingOverlay.onButton) {
+      showNowPlayingOverlay(false);
+    }
+  } else if (kNowPlayingAutoBanner && nowPlayingOverlay.visible &&
+             !nowPlayingOverlay.onButton &&
              now - nowPlayingOverlay.shownAt >= kNowPlayingOverlayMs) {
     hideNowPlayingOverlay();
   }
@@ -570,13 +757,20 @@ void pollNowPlaying() {
 
 void drawOverlays() {
   if (batteryOverlay.visible) drawBatteryOverlay();
-  if (nowPlayingOverlay.visible) drawNowPlayingOverlay();
+  if (nowPlayingOverlay.visible && !nowPlayingScreen.visible) {
+    drawNowPlayingOverlay();
+  }
 }
 
 // Redraws the screen after an overlay in *rotation* covering x/y/width/height
 // was hidden, then draws the overlays that are still visible.
 void restoreUnderOverlay(int16_t x, int16_t y, int16_t width, int16_t height,
                          uint8_t rotation) {
+  if (nowPlayingScreen.visible) {
+    drawNowPlayingScreen();
+    drawOverlays();
+    return;
+  }
   switch (screen.content) {
     case ScreenContent::kPlaylistFrame:
     case ScreenContent::kLiveFrame:
@@ -612,10 +806,13 @@ void restoreUnderOverlay(int16_t x, int16_t y, int16_t width, int16_t height,
 }
 
 void onScreenChanged() {
+  // New media, a message, or upload progress replaced the now-playing screen.
+  nowPlayingScreen.visible = false;
   if (screen.content != ScreenContent::kLiveFrame) releaseLiveFrame();
   if (screen.content == ScreenContent::kProgress) {
     batteryOverlay.visible = false;
     nowPlayingOverlay.visible = false;
+    nowPlayingOverlay.onButton = false;
   } else {
     drawOverlays();
   }
@@ -1232,7 +1429,9 @@ bool startStoredPlayback() {
 }
 
 void advanceStoredPlayback() {
-  if (!playback.running) return;
+  // Paused under the now-playing screen. Afterwards the loop below skips
+  // ahead to the frame that is due, as after any other late wake-up.
+  if (!playbackActive()) return;
   if (static_cast<int32_t>(millis() - playback.deadline) < 0) {
     preparePlaylistFrame(activePlaylist, playback.nextFrame);
     return;
@@ -1922,7 +2121,7 @@ void loop() {
   // Sleeping lets the idle task halt the CPU between passes instead of
   // spinning. Drawing has already finished, so this never splits a frame.
   const uint32_t sleepMs = loopIdleSleepMs(
-      busy || transfer.active, playback.running,
+      busy || transfer.active, playbackActive(),
       static_cast<int32_t>(playback.deadline - millis()));
   if (sleepMs > 0) delay(sleepMs);
   else yield();

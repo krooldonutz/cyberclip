@@ -232,9 +232,15 @@ The board can show the title and artist of whatever an iPhone is playing (Music,
 
 1. With the board powered on, open **Settings > Bluetooth** on the iPhone.
 2. Under **Other Devices**, tap **CyberClip**, then tap **Pair** when iOS asks.
-3. Play something. A banner along the bottom of the screen shows the track title and artist.
+3. Play something. The screen switches to a now-playing view with the track title and artist.
 
-The banner appears for 6 seconds when a new track starts or playback resumes, on top of whatever image or GIF is showing. It disappears when playback is paused. It is not shown while media is uploading. Long titles are shortened with "...". The banner font covers Latin, Greek, Cyrillic, and Japanese characters.
+While music is playing, the now-playing view replaces the image or GIF. When playback is paused or the iPhone disconnects, the media comes back and a saved GIF resumes. Sending new media, an upload, or a button message takes over the screen until the next track starts or playback resumes. The view is not shown while media is uploading.
+
+Pressing the GPIO14 button also shows a now-playing banner along the bottom, next to the battery indicator. It hides with the battery indicator. If no iPhone is connected or nothing is playing, the banner says so.
+
+Long titles wrap onto up to three lines in the full-screen view, and are shortened with "..." in the banner. The fonts cover Latin, Greek, Cyrillic, and Japanese characters.
+
+These behaviors are hardcoded switches near the top of the now-playing code in `firmware/matrix_display.ino`: `kNowPlayingFullScreen`, `kNowPlayingOnButton`, and `kNowPlayingAutoBanner`. The last one (off by default) shows the banner for 6 seconds whenever a track starts or playback resumes.
 
 The iPhone remembers the pairing and reconnects on its own when the board is in range and awake. The board accepts one Bluetooth connection at a time. To pair a different iPhone, choose **Forget This Device** on the current one first. The board only reads now-playing information. It does not expose any services of its own over Bluetooth, and Bluetooth cannot be used to send media or change settings.
 

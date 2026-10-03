@@ -168,6 +168,10 @@ void test_ams_utf8_storage() {
   TEST_ASSERT_EQUAL_UINT32(1, ams::utf8Boundary(kana, 4, 2));
   TEST_ASSERT_EQUAL_UINT32(1, ams::utf8Boundary(kana, 4, 3));
 
+  TEST_ASSERT_EQUAL_UINT32(1, ams::utf8Next(kana, 4, 0));
+  TEST_ASSERT_EQUAL_UINT32(4, ams::utf8Next(kana, 4, 1));
+  TEST_ASSERT_EQUAL_UINT32(4, ams::utf8Next(kana, 4, 4));
+
   char buffer[5] = "";
   TEST_ASSERT_TRUE(ams::storeUtf8(buffer, sizeof(buffer), cafe, 5));
   TEST_ASSERT_EQUAL_STRING("caf", buffer);
