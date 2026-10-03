@@ -86,6 +86,29 @@ void test_hotspot_validation_and_fallback_policy() {
       shouldRunHotspot(HOTSPOT_FALLBACK, true, true, 20000, 15000));
 }
 
+void test_power_policy() {
+  TEST_ASSERT_FALSE(onBatteryPower(true, 4350));
+  TEST_ASSERT_TRUE(onBatteryPower(false, 4249));
+  TEST_ASSERT_TRUE(onBatteryPower(true, 4300));
+  TEST_ASSERT_FALSE(onBatteryPower(false, 4300));
+
+  TEST_ASSERT_TRUE(shouldRunAtFullSpeed(false, false, 60000, 3000));
+  TEST_ASSERT_TRUE(shouldRunAtFullSpeed(true, true, 60000, 3000));
+  TEST_ASSERT_TRUE(shouldRunAtFullSpeed(true, false, 2999, 3000));
+  TEST_ASSERT_FALSE(shouldRunAtFullSpeed(true, false, 3000, 3000));
+
+  TEST_ASSERT_FALSE(shouldSuspendWifi(false, false, 600000, 120000));
+  TEST_ASSERT_FALSE(shouldSuspendWifi(true, false, 119999, 120000));
+  TEST_ASSERT_TRUE(shouldSuspendWifi(true, false, 120000, 120000));
+  TEST_ASSERT_FALSE(shouldSuspendWifi(true, true, 600000, 120000));
+
+  TEST_ASSERT_EQUAL_UINT32(0, loopIdleSleepMs(true, false, 0));
+  TEST_ASSERT_EQUAL_UINT32(1, loopIdleSleepMs(false, false, 0));
+  TEST_ASSERT_EQUAL_UINT32(0, loopIdleSleepMs(false, true, 1));
+  TEST_ASSERT_EQUAL_UINT32(0, loopIdleSleepMs(false, true, -5));
+  TEST_ASSERT_EQUAL_UINT32(1, loopIdleSleepMs(false, true, 2));
+}
+
 void test_battery_percent_and_level() {
   TEST_ASSERT_EQUAL_UINT8(0, batteryPercentFromMillivolts(0));
   TEST_ASSERT_EQUAL_UINT8(0, batteryPercentFromMillivolts(3300));
@@ -111,6 +134,7 @@ void runTests() {
   RUN_TEST(test_protocol_v2_playlist_metadata_integrity);
   RUN_TEST(test_wifi_command_bytes_do_not_collide);
   RUN_TEST(test_hotspot_validation_and_fallback_policy);
+  RUN_TEST(test_power_policy);
   UNITY_END();
 }
 

@@ -214,6 +214,50 @@ inline BatteryLevel batteryLevelFromPercent(uint8_t percent) {
   return BATTERY_LOW;
 }
 
+// Below this the board is treated as running from the cell. Readings between
+// this and kBatteryExternalPowerMillivolts keep the previous state, so a
+// voltage hovering near the USB threshold does not flip the CPU clock.
+constexpr uint16_t kBatteryPowerMillivolts = 4250;
+
+inline bool onBatteryPower(bool wasOnBattery, uint32_t millivolts) {
+  if (millivolts >= kBatteryExternalPowerMillivolts) return false;
+  if (millivolts < kBatteryPowerMillivolts) return true;
+  return wasOnBattery;
+}
+
+// The CPU only drops to the reduced clock on battery while the screen is
+// static: no GIF playing, no transfer or overlay, and no protocol bytes for
+// *holdMs*. Anything that decodes or draws therefore runs at full speed.
+inline bool shouldRunAtFullSpeed(bool onBattery, bool animating,
+                                 uint32_t msSinceActivity, uint32_t holdMs) {
+  return !onBattery || animating || msSinceActivity < holdMs;
+}
+
+// On battery, WiFi turns off after this long without a protocol command (the
+// same actions that appear in the app's activity log). Stored GIF playback
+// does not count, since it does not need the radio.
+constexpr uint32_t kWifiIdleTimeoutMs = 2 * 60 * 1000;
+
+inline bool shouldSuspendWifi(bool onBattery, bool transferActive,
+                              uint32_t msSinceActivity, uint32_t timeoutMs) {
+  return onBattery && !transferActive && msSinceActivity >= timeoutMs;
+}
+
+constexpr uint32_t kLoopIdleSleepMs = 1;
+
+// How long the main loop may sleep after a pass. It never sleeps while bytes
+// are arriving or a transfer is open, or when the next GIF frame is due
+// within the sleep, so frames stay on their deadlines.
+inline uint32_t loopIdleSleepMs(bool busy, bool playbackRunning,
+                                int32_t msUntilNextFrame) {
+  if (busy) return 0;
+  if (playbackRunning &&
+      msUntilNextFrame <= static_cast<int32_t>(kLoopIdleSleepMs)) {
+    return 0;
+  }
+  return kLoopIdleSleepMs;
+}
+
 inline size_t playlistMetadataSize(uint8_t frameCount) {
   return kPlaylistMetadataHeaderSize +
          static_cast<size_t>(frameCount) * sizeof(uint16_t) +

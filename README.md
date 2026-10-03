@@ -71,6 +71,23 @@ sleep, and starts the TFT backlight at 50%. The integrated display uses an
 backlight control can still raise it to 100%; previously saved browser
 preferences remain unchanged.
 
+The main loop sleeps for 1 ms between passes when it is idle, so the CPU halts
+instead of spinning. It never sleeps while data is arriving, while an upload
+is open, or when the next GIF frame is due within that millisecond. On the
+T-Display-S3, when it is running from the battery and the screen is static (no
+GIF playing, no transfer, no battery overlay, and no data for 3 seconds), the
+CPU also drops to 80 MHz. It returns to 160 MHz as soon as data arrives, before
+anything is decoded or drawn, so GIFs and incoming frames always render at
+full speed.
+
+On battery, the T-Display-S3 also turns WiFi (both the network connection and
+the hotspot) fully off after 2 minutes without a command from the app. These
+are the same actions that show up in the activity log, such as connecting,
+sending media, or changing the backlight. Saved media keeps playing while WiFi
+is off. To bring WiFi back, connect over USB, plug in USB power, hold **BOOT**
+for 1.5 seconds (the screen shows **WiFi on**), or wake the board from deep
+sleep. Your WiFi and hotspot settings are not changed.
+
 ## How it works
 
 ```text

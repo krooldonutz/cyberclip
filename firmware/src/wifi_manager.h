@@ -39,6 +39,12 @@ class WifiManager {
                         size_t passwordLength);
   void toggleHotspotMode();
 
+  // Turns the radio fully off (station and hotspot) without changing any
+  // stored settings; resume() brings back whatever those settings ask for.
+  void suspend();
+  void resume();
+  bool suspended() const { return suspended_; }
+
   WifiStatus status() const;
   HotspotStatus hotspotStatus() const;
   bool checkToken(const uint8_t *token, size_t length) const;
@@ -52,6 +58,7 @@ class WifiManager {
   void persistHotspotMode();
 
   bool enabled_ = false;
+  bool suspended_ = false;
   bool hasCredentials_ = false;
   bool hasToken_ = false;
   uint8_t token_[kWifiTokenSize] = {};

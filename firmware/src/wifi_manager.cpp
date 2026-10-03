@@ -191,6 +191,30 @@ void WifiManager::toggleHotspotMode() {
   persistHotspotMode();
 }
 
+void WifiManager::suspend() {
+  if (suspended_) return;
+  suspended_ = true;
+  if (dnsRunning_) {
+    dnsServer.stop();
+    dnsRunning_ = false;
+  }
+  hotspotRunning_ = false;
+  WiFi.softAPdisconnect(/*wifioff=*/false);
+  WiFi.disconnect(/*wifioff=*/false);
+  WiFi.mode(WIFI_OFF);
+  status_.state = WIFI_OFF;
+  memset(status_.ip, 0, sizeof(status_.ip));
+  disconnectedAt_ = 0;
+}
+
+void WifiManager::resume() {
+  if (!suspended_) return;
+  suspended_ = false;
+  lastAttemptAt_ = 0;
+  disconnectedAt_ = millis();
+  // poll() restarts the station and hotspot as their settings require.
+}
+
 void WifiManager::persistHotspotMode() {
   Preferences prefs;
   if (prefs.begin(kPreferencesNamespace, /*readOnly=*/false)) {
@@ -231,12 +255,15 @@ void WifiManager::connectIfNeeded() {
   status_.state = WIFI_CONNECTING;
   // Add station capability without tearing down an active media AP.
   WiFi.enableSTA(true);
+  // Reapplied here because the radio may have been off since begin().
+  WiFi.setSleep(true);
   WiFi.setHostname(status_.hostname);
   wsServerBegin();
   WiFi.begin(ssid_, password_);
 }
 
 void WifiManager::poll() {
+  if (suspended_) return;
   if (dnsRunning_) dnsServer.processNextRequest();
   const uint32_t now = millis();
   const bool stationUsable = enabled_ && hasCredentials_;
