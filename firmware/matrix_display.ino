@@ -164,7 +164,7 @@ constexpr uint32_t kSleepButtonDebounceMs = 30;
 constexpr uint32_t kHotspotButtonHoldMs = 1500;
 constexpr uint8_t kFirmwareMajor = 2;
 constexpr uint8_t kFirmwareMinor = 0;
-constexpr uint8_t kFirmwarePatch = 21;
+constexpr uint8_t kFirmwarePatch = 22;
 using board::kDeviceName;
 constexpr char kMetadataPath[] = "/playlist.meta";
 constexpr char kMetadataTempPath[] = "/playlist.tmp";
@@ -218,8 +218,35 @@ struct UploadProgress {
   bool visible = false;
 } uploadProgress;
 
+// Frames are decoded off-screen and pushed to the panel in one burst, so the
+// panel never scans out a half-drawn frame (tearing). The buffer is kept in the
+// panel's native portrait orientation and rotated frames are rotated while
+// decoding: the panel refreshes row by row in that orientation, and writing in
+// any other order makes the boundary between old and new frames diagonal. The
+// buffer is split into bands so it still fits when the heap is fragmented.
+constexpr uint8_t kFramebufferBands = 4;
+constexpr uint16_t kFramebufferBandRows =
+    (board::kHeight + kFramebufferBands - 1) / kFramebufferBands;
+constexpr uint32_t kFramebufferBandPixels =
+    static_cast<uint32_t>(kFramebufferBandRows) * board::kWidth;
+
+struct Framebuffer {
+  uint16_t *bands[kFramebufferBands]{};
+  // Rotation of the decoded frame, and its size in that rotation.
+  uint8_t rotation = 0;
+  uint16_t width = 0;
+  uint16_t height = 0;
+  bool allocated = false;
+  // Set when the buffer holds a decoded stored frame that is not yet shown.
+  bool holdsPlaylistFrame = false;
+  uint8_t generation = 0;
+  uint16_t frameIndex = 0;
+} framebuffer;
+
+enum class JpegOutput : uint8_t { kDiscard, kDisplay, kFramebuffer };
+JpegOutput jpegOutput = JpegOutput::kDiscard;
+
 uint8_t backlight = 128;
-bool renderToDisplay = false;
 bool filesystemMounted = false;
 struct ButtonState {
   bool armed = false;
@@ -633,6 +660,7 @@ void framePath(char *path, size_t length, uint8_t generation,
 
 bool removeGeneration(uint8_t generation) {
   if (!filesystemMounted) return false;
+  framebuffer.holdsPlaylistFrame = false;
   bool removed = true;
   char path[12];
   for (uint16_t i = 0; i < 255; ++i) {
@@ -702,33 +730,127 @@ bool dimensionsMatch(uint16_t width, uint16_t height, uint8_t rotation) {
                          : (width == board::kWidth && height == board::kHeight));
 }
 
+void allocateFramebuffer() {
+  for (uint16_t *&band : framebuffer.bands) {
+    band = static_cast<uint16_t *>(heap_caps_malloc(
+        kFramebufferBandPixels * sizeof(uint16_t),
+        MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+    if (!band) {
+      band = static_cast<uint16_t *>(heap_caps_malloc(
+          kFramebufferBandPixels * sizeof(uint16_t), MALLOC_CAP_8BIT));
+    }
+    if (!band) {
+      // Fall back to drawing decoded blocks straight to the panel.
+      for (uint16_t *&allocated : framebuffer.bands) {
+        free(allocated);
+        allocated = nullptr;
+      }
+      return;
+    }
+  }
+  framebuffer.allocated = true;
+}
+
+uint16_t *framebufferPixel(int nativeX, int nativeY) {
+  return framebuffer.bands[nativeY / kFramebufferBandRows] +
+         (nativeY % kFramebufferBandRows) * board::kWidth + nativeX;
+}
+
 int jpegDraw(JPEGDRAW *draw) {
-  if (renderToDisplay) {
+  if (jpegOutput == JpegOutput::kDisplay) {
     display.pushImage(draw->x, draw->y, draw->iWidth, draw->iHeight,
                       draw->pPixels);
+  } else if (jpegOutput == JpegOutput::kFramebuffer) {
+    if (draw->x >= framebuffer.width) return 1;
+    const int columns =
+        min<int>(draw->iWidthUsed, framebuffer.width - draw->x);
+    for (int row = 0; row < draw->iHeight; ++row) {
+      const int y = draw->y + row;
+      if (y >= framebuffer.height) break;
+      const uint16_t *source = draw->pPixels + row * draw->iWidth;
+      if (framebuffer.rotation == 0) {
+        memcpy(framebufferPixel(draw->x, y), source,
+               columns * sizeof(uint16_t));
+        continue;
+      }
+      for (int column = 0; column < columns; ++column) {
+        const int x = draw->x + column;
+        // Same mapping as LovyanGFX's rotations (Panel_FrameBufferBase).
+        int nativeX, nativeY;
+        switch (framebuffer.rotation) {
+          case 1:
+            nativeX = framebuffer.height - 1 - y;
+            nativeY = x;
+            break;
+          case 2:
+            nativeX = framebuffer.width - 1 - x;
+            nativeY = framebuffer.height - 1 - y;
+            break;
+          default:
+            nativeX = y;
+            nativeY = framebuffer.width - 1 - x;
+            break;
+        }
+        *framebufferPixel(nativeX, nativeY) = source[column];
+      }
+    }
   }
   return 1;
 }
 
-bool decodeJpegBuffer(uint8_t *data, uint32_t size, uint16_t width,
-                      uint16_t height, uint8_t rotation, bool render) {
+bool decodeJpeg(uint8_t *data, uint32_t size, uint16_t width, uint16_t height,
+                uint8_t rotation, JpegOutput output) {
   if (!jpeg.openRAM(data, static_cast<int>(size), jpegDraw)) return false;
   const bool dimensionsOk =
       jpeg.getWidth() == width && jpeg.getHeight() == height;
   bool decoded = false;
   if (dimensionsOk) {
     jpeg.setPixelType(RGB565_BIG_ENDIAN);
-    renderToDisplay = render;
-    if (render) {
-      display.setRotation(rotation);
-      display.startWrite();
+    if (output == JpegOutput::kFramebuffer) {
+      framebuffer.holdsPlaylistFrame = false;
+      framebuffer.rotation = rotation;
+      framebuffer.width = width;
+      framebuffer.height = height;
     }
+    jpegOutput = output;
+    if (output == JpegOutput::kDisplay) display.startWrite();
     decoded = jpeg.decode(0, 0, 0) != 0;
-    if (render) display.endWrite();
-    renderToDisplay = false;
+    if (output == JpegOutput::kDisplay) display.endWrite();
+    jpegOutput = JpegOutput::kDiscard;
   }
   jpeg.close();
   return dimensionsOk && decoded;
+}
+
+void presentFramebuffer() {
+  display.setRotation(0);
+  display.startWrite();
+  for (uint16_t y = 0, band = 0; y < board::kHeight;
+       y += kFramebufferBandRows, ++band) {
+    const uint16_t rows = min<int>(kFramebufferBandRows, board::kHeight - y);
+    display.pushImage(0, y, board::kWidth, rows, framebuffer.bands[band]);
+  }
+  display.endWrite();
+  // Later drawing (overlays, text) uses the frame's own orientation.
+  display.setRotation(framebuffer.rotation);
+  framebuffer.holdsPlaylistFrame = false;
+}
+
+bool decodeJpegBuffer(uint8_t *data, uint32_t size, uint16_t width,
+                      uint16_t height, uint8_t rotation, bool render) {
+  if (!render) {
+    return decodeJpeg(data, size, width, height, rotation, JpegOutput::kDiscard);
+  }
+  if (!framebuffer.allocated) {
+    display.setRotation(rotation);
+    return decodeJpeg(data, size, width, height, rotation, JpegOutput::kDisplay);
+  }
+  if (!decodeJpeg(data, size, width, height, rotation,
+                  JpegOutput::kFramebuffer)) {
+    return false;
+  }
+  presentFramebuffer();
+  return true;
 }
 
 bool decodeTransfer(bool render) {
@@ -761,7 +883,8 @@ bool readFileToBuffer(const char *path, uint8_t **data, uint32_t *size) {
   return true;
 }
 
-bool renderPlaylistFrame(const Playlist &playlist, uint16_t frameIndex) {
+bool decodePlaylistFrame(const Playlist &playlist, uint16_t frameIndex,
+                         bool render) {
   if (!filesystemMounted || !playlist.valid ||
       frameIndex >= playlist.frameCount) {
     return false;
@@ -775,11 +898,40 @@ bool renderPlaylistFrame(const Playlist &playlist, uint16_t frameIndex) {
       (playlist.rotation & 1) ? board::kHeight : board::kWidth;
   const uint16_t height =
       (playlist.rotation & 1) ? board::kWidth : board::kHeight;
-  const bool rendered =
-      decodeJpegBuffer(data, size, width, height, playlist.rotation, true);
+  const bool decoded =
+      render ? decodeJpegBuffer(data, size, width, height, playlist.rotation,
+                                true)
+             : decodeJpeg(data, size, width, height, playlist.rotation,
+                          JpegOutput::kFramebuffer);
   free(data);
-  if (rendered) markScreenPlaylistFrame(playlist.generation, frameIndex);
-  return rendered;
+  return decoded;
+}
+
+// Decodes a stored frame into the framebuffer ahead of its deadline, so
+// showing it later is a single push with no file read or decode delay.
+void preparePlaylistFrame(const Playlist &playlist, uint16_t frameIndex) {
+  if (!framebuffer.allocated ||
+      (framebuffer.holdsPlaylistFrame &&
+       framebuffer.generation == playlist.generation &&
+       framebuffer.frameIndex == frameIndex)) {
+    return;
+  }
+  if (!decodePlaylistFrame(playlist, frameIndex, false)) return;
+  framebuffer.holdsPlaylistFrame = true;
+  framebuffer.generation = playlist.generation;
+  framebuffer.frameIndex = frameIndex;
+}
+
+bool renderPlaylistFrame(const Playlist &playlist, uint16_t frameIndex) {
+  if (framebuffer.holdsPlaylistFrame &&
+      framebuffer.generation == playlist.generation &&
+      framebuffer.frameIndex == frameIndex && playlist.valid) {
+    presentFramebuffer();
+  } else if (!decodePlaylistFrame(playlist, frameIndex, true)) {
+    return false;
+  }
+  markScreenPlaylistFrame(playlist.generation, frameIndex);
+  return true;
 }
 
 bool playlistFilesExist(const Playlist &playlist) {
@@ -898,8 +1050,9 @@ bool startStoredPlayback() {
 }
 
 void advanceStoredPlayback() {
-  if (!playback.running ||
-      static_cast<int32_t>(millis() - playback.deadline) < 0) {
+  if (!playback.running) return;
+  if (static_cast<int32_t>(millis() - playback.deadline) < 0) {
+    preparePlaylistFrame(activePlaylist, playback.nextFrame);
     return;
   }
 
@@ -1003,6 +1156,7 @@ bool persistTransferFrame() {
   char path[12];
   framePath(path, sizeof(path), stagingPlaylist.generation,
             transfer.frameIndex);
+  framebuffer.holdsPlaylistFrame = false;
   LittleFS.remove(path);
   File file = LittleFS.open(path, FILE_WRITE);
   if (!file) return false;
@@ -1546,6 +1700,8 @@ void setup() {
   display.setBrightness(backlight);
   display.setRotation(0);
   display.fillScreen(TFT_BLACK);
+  // Before WiFi starts, while the heap is least fragmented.
+  allocateFramebuffer();
 
   filesystemMounted = LittleFS.begin(false);
   if (!filesystemMounted) filesystemMounted = LittleFS.begin(true);
