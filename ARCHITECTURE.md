@@ -5,7 +5,7 @@
 Cyberclip has two deployable parts:
 
 1. An HTTPS-hosted Vite PWA running in Chrome or Edge.
-2. Firmware flashed to the ideaspark ESP32/ST7789 board.
+2. Firmware flashed to the LilyGO T-Display-S3 (ESP32-S3 with an integrated ST7789).
 
 The browser owns all user-facing and media-heavy behavior. The ESP32 is intentionally a small, defensive display endpoint.
 
@@ -55,13 +55,13 @@ Both browser entries import the same `images.js`, `gifs.js`, `protocol.js`, and 
 
 `firmware/src/wifi_manager.h/.cpp` stores station credentials, the local pairing token, hotspot mode, last enabled hotspot mode, and WPA2 password in NVS (via `Preferences`). It owns the combined AP/station lifecycle. Hotspot modes are off, automatic fallback after station failure, and always on.
 
-Normal operation uses a balanced 160 MHz CPU clock, an 80 MHz integrated-panel
-SPI clock, WiFi station modem sleep, and a 50% default TFT backlight. The higher
-render throughput shortens visible progressive redraws without returning to the
-full-power defaults. The existing BOOT-button deep sleep remains the
+Normal operation uses a balanced 160 MHz CPU clock, a 20 MHz 8-bit parallel
+panel bus, WiFi station modem sleep, and a 50% default TFT backlight. The existing BOOT-button deep sleep remains the
 lowest-power state and turns off the display until wake.
 
 `firmware/src/ws_server.h/.cpp` runs the HTTP server and WebSocket endpoint (`ESPAsyncWebServer`/`AsyncWebSocket`). The WebSocket carries the same framed packets as USB serial and accepts one client at a time. Station-side clients must present the 16-byte pairing token. AP-side clients may use the hosted page's empty authorization preamble only when the server observes an AP-interface local address. Later bytes are queued and drained on the main loop task so protocol handling remains single-threaded.
+
+`firmware/src/ble_media.h/.cpp` uses NimBLE to advertise as a BLE peripheral that solicits Apple Media Service (AMS), so iOS lists it under Settings > Bluetooth. After a bonded, encrypted connection (Just Works, since the board has no input), a small setup task discovers AMS on the iPhone, subscribes to Entity Update notifications, and registers for the track title and artist and the player's playback state. GATT discovery blocks, so it cannot run inside NimBLE host callbacks. Notifications are parsed on the NimBLE host task (`firmware/ams.h`, covered by the native test) into a lock-protected `NowPlaying` snapshot with a revision counter. The main loop polls that revision and draws the now-playing banner itself, so all display access stays on the loop task. Overlays (the banner, and the battery indicator on the T-Display-S3) are removed by pushing the framebuffer again when it still holds the frame on screen. Otherwise they re-render the current frame.
 
 The dedicated Vite device build is gzip-compressed and generated into a firmware header before an ESP32 build. HTTP serves those immutable assets from program flash only to AP-side clients. It does not use LittleFS, so the desktop firmware updater can replace the hosted page while preserving stored media.
 

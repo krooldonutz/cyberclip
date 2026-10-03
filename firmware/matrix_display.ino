@@ -9,10 +9,10 @@
 #include <esp32-hal-cpu.h>
 
 #include "protocol.h"
+#include "src/ble_media.h"
 #include "src/wifi_manager.h"
 #include "src/ws_server.h"
 
-#if defined(CYBERCLIP_BOARD_LILYGO_T_DISPLAY_S3)
 namespace board {
 // LilyGO T-Display-S3: ESP32-S3 with a 1.9" ST7789 on an 8-bit i8080 bus.
 constexpr int kData[8] = {39, 40, 41, 42, 45, 46, 47, 48};
@@ -28,7 +28,6 @@ constexpr int kLcdPower = 15;
 constexpr int kBatteryAdc = 4;
 constexpr int kBatteryDivider = 2;
 constexpr int kBatteryButton = 14;
-#define CYBERCLIP_HAS_BATTERY 1
 constexpr uint16_t kWidth = 170;
 constexpr uint16_t kHeight = 320;
 
@@ -42,35 +41,10 @@ constexpr uint32_t kBusFrequency = 20000000;
 constexpr uint8_t kBacklightPwmChannel = 7;
 constexpr char kDeviceName[] = "CyberClip LilyGO T-Display-S3 ST7789";
 }  // namespace board
-#else
-namespace board {
-constexpr int kMosi = 23;
-constexpr int kSclk = 18;
-constexpr int kCs = 15;
-constexpr int kDc = 2;
-constexpr int kReset = 4;
-constexpr int kBacklight = 32;
-constexpr int kLcdPower = -1;
-constexpr uint16_t kWidth = 170;
-constexpr uint16_t kHeight = 320;
-
-// This 1.9" board exposes a centered 170x320 window in ST7789 RAM.
-constexpr uint16_t kControllerWidth = 240;
-constexpr uint16_t kControllerHeight = 320;
-constexpr uint16_t kOffsetX = 35;
-constexpr uint16_t kOffsetY = 0;
-constexpr bool kInvert = true;
-constexpr bool kRgbOrder = false;
-constexpr uint32_t kSpiFrequency = 80000000;
-constexpr uint8_t kBacklightPwmChannel = 7;
-constexpr char kDeviceName[] = "CyberClip Ideaspark ESP32 ST7789";
-}  // namespace board
-#endif
 
 class MatrixDisplay : public lgfx::LGFX_Device {
  public:
   MatrixDisplay() {
-#if defined(CYBERCLIP_BOARD_LILYGO_T_DISPLAY_S3)
     {
       auto cfg = bus_.config();
       cfg.freq_write = board::kBusFrequency;
@@ -88,24 +62,6 @@ class MatrixDisplay : public lgfx::LGFX_Device {
       bus_.config(cfg);
       panel_.setBus(&bus_);
     }
-#else
-    {
-      auto cfg = bus_.config();
-      cfg.spi_host = VSPI_HOST;
-      cfg.spi_mode = 0;
-      cfg.freq_write = board::kSpiFrequency;
-      cfg.freq_read = 16000000;
-      cfg.spi_3wire = true;
-      cfg.use_lock = true;
-      cfg.dma_channel = SPI_DMA_CH_AUTO;
-      cfg.pin_sclk = board::kSclk;
-      cfg.pin_mosi = board::kMosi;
-      cfg.pin_miso = -1;
-      cfg.pin_dc = board::kDc;
-      bus_.config(cfg);
-      panel_.setBus(&bus_);
-    }
-#endif
     {
       auto cfg = panel_.config();
       cfg.pin_cs = board::kCs;
@@ -138,11 +94,7 @@ class MatrixDisplay : public lgfx::LGFX_Device {
   }
 
  private:
-#if defined(CYBERCLIP_BOARD_LILYGO_T_DISPLAY_S3)
   lgfx::Bus_Parallel8 bus_;
-#else
-  lgfx::Bus_SPI bus_;
-#endif
   lgfx::Panel_ST7789 panel_;
   lgfx::Light_PWM light_;
 };
@@ -244,6 +196,9 @@ struct Framebuffer {
   bool allocated = false;
   // Set when the buffer holds a decoded stored frame that is not yet shown.
   bool holdsPlaylistFrame = false;
+  // Set while the panel shows exactly the buffer's contents, so an overlay
+  // can be removed by pushing the buffer again.
+  bool presented = false;
   uint8_t generation = 0;
   uint16_t frameIndex = 0;
 } framebuffer;
@@ -271,6 +226,10 @@ bool startStoredPlayback();
 bool decodeJpegBuffer(uint8_t *data, uint32_t size, uint16_t width,
                       uint16_t height, uint8_t rotation, bool render);
 bool renderPlaylistFrame(const Playlist &playlist, uint16_t frameIndex);
+void presentFramebuffer();
+void drawOverlays();
+void restoreUnderOverlay(int16_t x, int16_t y, int16_t width, int16_t height,
+                         uint8_t rotation);
 
 // Tracks what is on screen so a temporary overlay can be removed afterwards.
 enum class ScreenContent : uint8_t { kFill, kPlaylistFrame, kLiveFrame, kProgress };
@@ -281,7 +240,6 @@ struct ScreenState {
   uint16_t playlistFrame = 0;
 } screen;
 
-#if defined(CYBERCLIP_HAS_BATTERY)
 constexpr uint32_t kBatteryOverlayMs = 3000;
 constexpr uint8_t kBatterySamples = 16;
 constexpr int16_t kBatteryOverlayMargin = 4;
@@ -380,31 +338,9 @@ void showBatteryOverlay() {
 void hideBatteryOverlay() {
   if (!batteryOverlay.visible) return;
   batteryOverlay.visible = false;
-  switch (screen.content) {
-    case ScreenContent::kPlaylistFrame:
-      if (activePlaylist.valid &&
-          activePlaylist.generation == screen.generation &&
-          renderPlaylistFrame(activePlaylist, screen.playlistFrame)) {
-        return;
-      }
-      break;
-    case ScreenContent::kLiveFrame:
-      if (liveFrame.data &&
-          decodeJpegBuffer(liveFrame.data, liveFrame.size, liveFrame.width,
-                           liveFrame.height, liveFrame.rotation, true)) {
-        return;
-      }
-      break;
-    case ScreenContent::kProgress:
-      return;
-    case ScreenContent::kFill:
-      break;
-  }
-  display.setRotation(batteryOverlay.rotation);
-  display.fillRect(batteryOverlayX(), kBatteryOverlayMargin,
-                   kBatteryOverlayWidth, kBatteryOverlayHeight,
-                   screen.content == ScreenContent::kFill ? screen.fillColor
-                                                          : TFT_BLACK);
+  restoreUnderOverlay(batteryOverlayX(), kBatteryOverlayMargin,
+                      kBatteryOverlayWidth, kBatteryOverlayHeight,
+                      batteryOverlay.rotation);
 }
 
 void pollBatteryButton() {
@@ -493,20 +429,196 @@ void updatePowerMode() {
     wifiManager.resume();
   }
 }
-#else
-void noteActivity() {}
-void updatePowerMode() {}
-#endif
+
+// Banner along the bottom edge showing what the paired iPhone is playing.
+// It appears when a new track starts or playback resumes, then hides again.
+constexpr uint32_t kNowPlayingOverlayMs = 6000;
+// iOS sends the title and artist as separate notifications; waiting briefly
+// keeps the banner from showing the new title with the old artist.
+constexpr uint32_t kNowPlayingSettleMs = 300;
+constexpr int16_t kNowPlayingMargin = 4;
+constexpr int16_t kNowPlayingHeight = 34;
+constexpr int16_t kNowPlayingIconWidth = 18;
+constexpr uint16_t kNowPlayingArtistColor = 0xBDF7;  // light grey
+const lgfx::IFont *const kNowPlayingFont = &fonts::efontJA_12;
+
+struct {
+  bool visible = false;
+  bool pending = false;
+  uint32_t seenRevision = 0;
+  uint32_t changedAt = 0;
+  uint32_t shownAt = 0;
+  uint8_t rotation = 0;
+  NowPlaying latest;
+  // What the banner last announced, so unrelated updates do not re-show it.
+  char shownTitle[kNowPlayingTextSize] = {};
+  char shownArtist[kNowPlayingTextSize] = {};
+  bool wasPlaying = false;
+} nowPlayingOverlay;
+
+int16_t nowPlayingOverlayY() {
+  return display.height() - kNowPlayingHeight - kNowPlayingMargin;
+}
+
+int16_t nowPlayingOverlayWidth() {
+  return display.width() - kNowPlayingMargin * 2;
+}
+
+// Draws *text* left-aligned within *maxWidth*, ending it with "..." if it
+// does not fit. Cuts only between UTF-8 characters.
+void drawFittedText(const char *text, int16_t x, int16_t y, int16_t maxWidth) {
+  char fitted[kNowPlayingTextSize + 3];
+  size_t length = strlen(text);
+  if (display.textWidth(text) <= maxWidth) {
+    display.drawString(text, x, y);
+    return;
+  }
+  const int16_t ellipsisWidth = display.textWidth("...");
+  while (length > 0) {
+    length = ams::utf8Boundary(text, strlen(text), length - 1);
+    memcpy(fitted, text, length);
+    fitted[length] = '\0';
+    if (display.textWidth(fitted) + ellipsisWidth <= maxWidth) break;
+  }
+  memcpy(fitted + length, "...", 4);
+  display.drawString(fitted, x, y);
+}
+
+void drawNowPlayingOverlay() {
+  nowPlayingOverlay.rotation = display.getRotation();
+  const NowPlaying &info = nowPlayingOverlay.latest;
+  const int16_t x = kNowPlayingMargin;
+  const int16_t y = nowPlayingOverlayY();
+  const int16_t width = nowPlayingOverlayWidth();
+
+  display.startWrite();
+  display.fillRoundRect(x, y, width, kNowPlayingHeight, 4, TFT_BLACK);
+  display.drawRoundRect(x, y, width, kNowPlayingHeight, 4, TFT_DARKGREY);
+
+  // A beamed pair of eighth notes.
+  const int16_t noteX = x + 5;
+  const int16_t noteY = y + kNowPlayingHeight / 2;
+  display.fillCircle(noteX + 2, noteY + 5, 2, TFT_WHITE);
+  display.fillCircle(noteX + 10, noteY + 3, 2, TFT_WHITE);
+  display.drawFastVLine(noteX + 4, noteY - 6, 11, TFT_WHITE);
+  display.drawFastVLine(noteX + 12, noteY - 8, 11, TFT_WHITE);
+  display.drawLine(noteX + 4, noteY - 6, noteX + 12, noteY - 8, TFT_WHITE);
+  display.drawLine(noteX + 4, noteY - 5, noteX + 12, noteY - 7, TFT_WHITE);
+
+  const int16_t textX = x + 4 + kNowPlayingIconWidth;
+  const int16_t textWidth = width - (textX - x) - 4;
+  display.setFont(kNowPlayingFont);
+  display.setTextSize(1);
+  display.setTextDatum(top_left);
+  display.setTextColor(TFT_WHITE, TFT_BLACK);
+  drawFittedText(info.title, textX, y + 4, textWidth);
+  display.setTextColor(kNowPlayingArtistColor, TFT_BLACK);
+  drawFittedText(info.artist, textX, y + 18, textWidth);
+  display.setFont(&fonts::Font0);
+  display.endWrite();
+}
+
+void showNowPlayingOverlay() {
+  if (screen.content == ScreenContent::kProgress) return;
+  nowPlayingOverlay.visible = true;
+  nowPlayingOverlay.shownAt = millis();
+  drawNowPlayingOverlay();
+}
+
+void hideNowPlayingOverlay() {
+  if (!nowPlayingOverlay.visible) return;
+  nowPlayingOverlay.visible = false;
+  display.setRotation(nowPlayingOverlay.rotation);
+  restoreUnderOverlay(kNowPlayingMargin, nowPlayingOverlayY(),
+                      nowPlayingOverlayWidth(), kNowPlayingHeight,
+                      nowPlayingOverlay.rotation);
+}
+
+void pollNowPlaying() {
+  const uint32_t now = millis();
+  const uint32_t revision = bleMedia.revision();
+  if (revision != nowPlayingOverlay.seenRevision) {
+    nowPlayingOverlay.seenRevision = revision;
+    nowPlayingOverlay.latest = bleMedia.snapshot();
+    const NowPlaying &info = nowPlayingOverlay.latest;
+    const bool playing = info.connected &&
+                         info.playback == ams::PLAYBACK_PLAYING &&
+                         info.title[0] != '\0';
+    if (!playing) {
+      nowPlayingOverlay.pending = false;
+      hideNowPlayingOverlay();
+    } else if (!nowPlayingOverlay.wasPlaying ||
+               strcmp(info.title, nowPlayingOverlay.shownTitle) != 0 ||
+               strcmp(info.artist, nowPlayingOverlay.shownArtist) != 0) {
+      nowPlayingOverlay.pending = true;
+      nowPlayingOverlay.changedAt = now;
+    }
+    nowPlayingOverlay.wasPlaying = playing;
+  }
+
+  if (nowPlayingOverlay.pending &&
+      now - nowPlayingOverlay.changedAt >= kNowPlayingSettleMs) {
+    nowPlayingOverlay.pending = false;
+    strcpy(nowPlayingOverlay.shownTitle, nowPlayingOverlay.latest.title);
+    strcpy(nowPlayingOverlay.shownArtist, nowPlayingOverlay.latest.artist);
+    showNowPlayingOverlay();
+  } else if (nowPlayingOverlay.visible &&
+             now - nowPlayingOverlay.shownAt >= kNowPlayingOverlayMs) {
+    hideNowPlayingOverlay();
+  }
+}
+
+void drawOverlays() {
+  if (batteryOverlay.visible) drawBatteryOverlay();
+  if (nowPlayingOverlay.visible) drawNowPlayingOverlay();
+}
+
+// Redraws the screen after an overlay in *rotation* covering x/y/width/height
+// was hidden, then draws the overlays that are still visible.
+void restoreUnderOverlay(int16_t x, int16_t y, int16_t width, int16_t height,
+                         uint8_t rotation) {
+  switch (screen.content) {
+    case ScreenContent::kPlaylistFrame:
+    case ScreenContent::kLiveFrame:
+      if (framebuffer.allocated && framebuffer.presented) {
+        presentFramebuffer();
+        drawOverlays();
+        return;
+      }
+      // Both re-render through markScreen*(), which redraws the overlays.
+      if (screen.content == ScreenContent::kPlaylistFrame &&
+          activePlaylist.valid &&
+          activePlaylist.generation == screen.generation &&
+          renderPlaylistFrame(activePlaylist, screen.playlistFrame)) {
+        return;
+      }
+      if (screen.content == ScreenContent::kLiveFrame && liveFrame.data &&
+          decodeJpegBuffer(liveFrame.data, liveFrame.size, liveFrame.width,
+                           liveFrame.height, liveFrame.rotation, true)) {
+        drawOverlays();
+        return;
+      }
+      break;
+    case ScreenContent::kProgress:
+      return;
+    case ScreenContent::kFill:
+      break;
+  }
+  display.setRotation(rotation);
+  display.fillRect(x, y, width, height,
+                   screen.content == ScreenContent::kFill ? screen.fillColor
+                                                          : TFT_BLACK);
+  drawOverlays();
+}
 
 void onScreenChanged() {
-#if defined(CYBERCLIP_HAS_BATTERY)
   if (screen.content != ScreenContent::kLiveFrame) releaseLiveFrame();
   if (screen.content == ScreenContent::kProgress) {
     batteryOverlay.visible = false;
-  } else if (batteryOverlay.visible) {
-    drawBatteryOverlay();
+    nowPlayingOverlay.visible = false;
+  } else {
+    drawOverlays();
   }
-#endif
 }
 
 void markScreenFill(uint16_t color) {
@@ -526,7 +638,6 @@ void markScreenPlaylistFrame(uint8_t generation, uint16_t frameIndex) {
 // Called right after a live transfer was rendered; may take ownership of its
 // JPEG buffer so the frame can be redrawn later.
 void markScreenLiveFrame() {
-#if defined(CYBERCLIP_HAS_BATTERY)
   releaseLiveFrame();
   liveFrame.data = transfer.data;
   liveFrame.size = transfer.total;
@@ -534,7 +645,6 @@ void markScreenLiveFrame() {
   liveFrame.height = transfer.height;
   liveFrame.rotation = transfer.rotation;
   transfer.data = nullptr;
-#endif
   screen = ScreenState{};
   screen.content = ScreenContent::kLiveFrame;
   onScreenChanged();
@@ -616,19 +726,16 @@ void enterDeepSleep() {
   pinMode(board::kBacklight, OUTPUT);
   digitalWrite(board::kBacklight, LOW);
   gpio_hold_en(static_cast<gpio_num_t>(board::kBacklight));
-  if (board::kLcdPower >= 0) {
+  {
     const gpio_num_t lcdPower = static_cast<gpio_num_t>(board::kLcdPower);
     gpio_hold_dis(lcdPower);
     pinMode(board::kLcdPower, OUTPUT);
     digitalWrite(board::kLcdPower, LOW);
     gpio_hold_en(lcdPower);
   }
-#if CONFIG_IDF_TARGET_ESP32S3
   // Digital (non-RTC) pad holds only persist into deep sleep when enabled.
   gpio_deep_sleep_hold_en();
-#endif
 
-#if defined(CYBERCLIP_BOARD_LILYGO_T_DISPLAY_S3)
   // In deep sleep the button pads are RTC-muxed, where the digital pull-ups
   // no longer apply. Enable the RTC pull-ups on every button and keep
   // RTC_PERIPH powered so they (and the pads) are not isolated; otherwise a
@@ -644,9 +751,6 @@ void enterDeepSleep() {
   }
   delay(5);
   esp_sleep_enable_ext1_wakeup(wakeMask, ESP_EXT1_WAKEUP_ANY_LOW);
-#else
-  esp_sleep_enable_ext0_wakeup(kSleepButton, LOW);
-#endif
   esp_deep_sleep_start();
 }
 
@@ -884,6 +988,7 @@ bool decodeJpeg(uint8_t *data, uint32_t size, uint16_t width, uint16_t height,
     jpeg.setPixelType(RGB565_BIG_ENDIAN);
     if (output == JpegOutput::kFramebuffer) {
       framebuffer.holdsPlaylistFrame = false;
+      framebuffer.presented = false;
       framebuffer.rotation = rotation;
       framebuffer.width = width;
       framebuffer.height = height;
@@ -910,6 +1015,7 @@ void presentFramebuffer() {
   // Later drawing (overlays, text) uses the frame's own orientation.
   display.setRotation(framebuffer.rotation);
   framebuffer.holdsPlaylistFrame = false;
+  framebuffer.presented = true;
 }
 
 bool decodeJpegBuffer(uint8_t *data, uint32_t size, uint16_t width,
@@ -1759,19 +1865,13 @@ void setup() {
     rtc_gpio_deinit(button);
     pinMode(button, INPUT_PULLUP);
   }
-#if CONFIG_IDF_TARGET_ESP32S3
   gpio_deep_sleep_hold_dis();
-#endif
-#if defined(CYBERCLIP_HAS_BATTERY)
   pinMode(board::kBatteryButton, INPUT_PULLUP);
   analogSetPinAttenuation(board::kBatteryAdc, ADC_11db);
-#endif
   gpio_hold_dis(static_cast<gpio_num_t>(board::kBacklight));
-  if (board::kLcdPower >= 0) {
-    gpio_hold_dis(static_cast<gpio_num_t>(board::kLcdPower));
-    pinMode(board::kLcdPower, OUTPUT);
-    digitalWrite(board::kLcdPower, HIGH);
-  }
+  gpio_hold_dis(static_cast<gpio_num_t>(board::kLcdPower));
+  pinMode(board::kLcdPower, OUTPUT);
+  digitalWrite(board::kLcdPower, HIGH);
   display.init();
   display.setBrightness(backlight);
   display.setRotation(0);
@@ -1784,6 +1884,7 @@ void setup() {
   if (filesystemMounted && loadActiveMetadata()) startStoredPlayback();
 
   wifiManager.begin();
+  bleMedia.begin();
 }
 
 void loop() {
@@ -1813,10 +1914,9 @@ void loop() {
   wsServerPoll();
   advanceStoredPlayback();
   pollButtons();
-#if defined(CYBERCLIP_HAS_BATTERY)
   pollBatteryButton();
   pollBatteryOverlay();
-#endif
+  pollNowPlaying();
   updatePowerMode();
 
   // Sleeping lets the idle task halt the CPU between passes instead of

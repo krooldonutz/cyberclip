@@ -7,7 +7,6 @@ const APP_SHELL = [
   '/icons/icon-192.png',
   '/icons/icon-512.png',
   '/firmware/manifest.json',
-  '/firmware/cyberclip-2.0.23.bin',
   '/firmware/cyberclip-lilygo-t-display-s3-2.0.23.bin',
 ];
 

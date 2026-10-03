@@ -1,36 +1,14 @@
 # Cyberclip
 
-Cyberclip is a VIA-style web controller for the **ideaspark ESP32 development board with an integrated 1.9-inch 170×320 ST7789 TFT**. It processes images and GIFs in the browser, compresses each display frame as JPEG, and sends it directly to the board over USB with the Web Serial API, or over your own local WiFi network.
+Cyberclip is a VIA-style web controller for the **LilyGO T-Display-S3 (ESP32-S3 with an integrated 1.9-inch 170×320 ST7789 TFT)**. It processes images and GIFs in the browser, compresses each display frame as JPEG, and sends it directly to the board over USB with the Web Serial API, or over your own local WiFi network.
 
-There is no application server, Python CLI, cloud relay, or Bluetooth pairing. WiFi is optional and local-only: the board can join your existing network or host its own WPA2-protected hotspot and phone upload page. WiFi and hotspot settings are provisioned over USB (see [WiFi control](#wifi-control) below). Media processing runs in the connected browser using the same image, GIF, and protocol modules in the desktop and hosted builds. Firmware flashing remains USB-only. The ESP32 receives validated frames, decodes them, and draws them to its display. When **Keep media on device** is enabled, it also stores the image or GIF in flash and resumes it without a USB data connection.
+There is no application server, Python CLI, or cloud relay. Bluetooth is used only to show what an iPhone is playing (see [iPhone now playing](#iphone-now-playing-bluetooth)); media still travels over USB or WiFi. WiFi is optional and local-only: the board can join your existing network or host its own WPA2-protected hotspot and phone upload page. WiFi and hotspot settings are provisioned over USB (see [WiFi control](#wifi-control) below). Media processing runs in the connected browser using the same image, GIF, and protocol modules in the desktop and hosted builds. Firmware flashing remains USB-only. The ESP32 receives validated frames, decodes them, and draws them to its display. When **Keep media on device** is enabled, it also stores the image or GIF in flash and resumes it without a USB data connection.
 
 ## Supported hardware
 
-- ideaspark ESP32 development board
-- ESP32-WROOM-32-class module with 16 MB flash
-- Integrated 1.9-inch, 170×320 ST7789 TFT
-- CH340 USB-to-serial interface over USB Type-C
-
-The current board profile uses the seller-reported display connections:
-
-| ST7789 signal | ESP32 pin |
-|---|---:|
-| MOSI | GPIO23 |
-| SCLK | GPIO18 |
-| CS | GPIO15 |
-| DC | GPIO2 |
-| Reset | GPIO4 |
-| Backlight | GPIO32 |
-
-Board revisions can differ. The current profile uses RGB panel order (`kRgbOrder = false`). Verify these pins, the 35-pixel horizontal panel offset, inversion, and RGB/BGR order against the example firmware supplied with your board before relying on the display.
-
-### LilyGO T-Display-S3
-
-The firmware is also built for the **LilyGO T-Display-S3** (ESP32-S3R8, 16 MB
-flash, 8 MB PSRAM, 1.9-inch 170×320 ST7789 on an 8-bit parallel bus). It uses
-the board's native USB port, so no CH340 driver is needed. The web installer
-detects the ESP32-S3 automatically and flashes the matching image; the display
-size, protocol, and web app are unchanged.
+- LilyGO T-Display-S3 (ESP32-S3R8, 16 MB flash, 8 MB PSRAM)
+- Integrated 1.9-inch, 170×320 ST7789 TFT on an 8-bit parallel bus
+- Native USB over USB Type-C (no USB-to-serial driver needed)
 
 Once Cyberclip is running, the board appears as **Pixie Pixel Gear** in the
 browser's serial-port picker (it uses TinyUSB with its own USB product name).
@@ -49,11 +27,10 @@ its own.
 | Backlight | GPIO38 |
 | LCD power enable | GPIO15 |
 
-The **BOOT** (GPIO0) button works as on the ideaspark board: a short press
-enters deep sleep, holding for 1.5 seconds toggles the hotspot, and pressing it
-again wakes the board. If
-the board is not detected for flashing, hold **BOOT**, press **RST**, then
-release **BOOT** to enter download mode.
+A short press of the **BOOT** (GPIO0) button enters deep sleep, holding it for
+1.5 seconds toggles the hotspot, and pressing it again wakes the board. If the
+board is not detected for flashing, hold **BOOT**, press **RST**, then release
+**BOOT** to enter download mode.
 
 Pressing the second user button (GPIO14) shows a battery indicator in the
 top-right corner, on top of whatever is on screen. It shows a three-bar battery
@@ -66,8 +43,7 @@ a percentage.
 
 To reduce steady-state power consumption and heat without compromising display
 updates, the firmware runs the ESP32 at 160 MHz, enables WiFi station modem
-sleep, and starts the TFT backlight at 50%. The integrated display uses an
-80 MHz SPI clock to minimize the time that each frame is visibly redrawn. The
+sleep, and starts the TFT backlight at 50%. The
 backlight control can still raise it to 100%; previously saved browser
 preferences remain unchanged.
 
@@ -117,7 +93,6 @@ ESP32 firmware
 - Current desktop Google Chrome or Microsoft Edge
 - HTTPS hosting or `localhost`
 - A data-capable USB Type-C cable
-- A CH340 driver if your operating system does not already provide one
 - Cyberclip firmware flashed to the board
 
 Web Serial is not currently supported by Firefox or Safari. Connecting always requires a user gesture and browser permission; Cyberclip cannot silently access serial devices.
@@ -144,21 +119,20 @@ the pull request publishes the firmware. Pull it before pushing again.
 
 Python 3.8+ and npm are required. The script installs
 [PlatformIO Core](https://platformio.org/) with pip when needed, builds the
-firmware for every supported board (`ideaspark_esp32` and
-`lilygo_t_display_s3`), merges each board's boot components into its own image,
+firmware (`lilygo_t_display_s3`), merges the boot components into a single image,
 updates the firmware manifest and service-worker cache, and removes the
 previously published binaries. The version
 argument must be newer than the version in `public/firmware/manifest.json`.
 
 The firmware dependencies are pinned in `firmware/platformio.ini`.
 
-The web installer reads `public/firmware/manifest.json`, detects the connected chip (ESP32 or ESP32-S3), and flashes the matching prebuilt image after validating its metadata. It writes the bootloader, partition table, and application image without erasing the LittleFS media partition.
+The web installer reads `public/firmware/manifest.json`, checks that the connected chip is an ESP32-S3, and flashes the prebuilt image after validating its metadata. It writes the bootloader, partition table, and application image without erasing the LittleFS media partition.
 
 ## Quick start
 
 1. Connect the board using a data-capable USB cable.
 2. Open the Cyberclip web app in desktop Chrome or Edge.
-3. Select **Install firmware**, choose the CH340 serial device, and keep it connected until the board restarts.
+3. Select **Install firmware**, choose **Pixie Pixel Gear** (or **USB JTAG/serial debug unit** on a board without Cyberclip yet), and keep it connected until the board restarts.
 4. Select **Connect** and approve access if the browser prompts again.
 5. Wait for Cyberclip to verify the firmware and display capabilities.
 6. Choose an image or GIF, adjust its fit/rotation/quality, then select **Display image** or **Play GIF**.
@@ -252,6 +226,20 @@ When the hotspot is running, join the displayed `Cyberclip-......` network from 
 
 The hotspot's WPA2 password is the access boundary for its self-hosted page. A WebSocket is accepted without the LAN pairing token only when the firmware observes that it arrived through the AP interface. Home-network WebSockets still require the random token issued during USB pairing. The password is stored on the device and is never returned to either web UI.
 
+## iPhone now playing (Bluetooth)
+
+The board can show the title and artist of whatever an iPhone is playing (Music, Spotify, podcasts, or any app that shows up on the lock screen). It reads this over Bluetooth Low Energy through Apple Media Service (AMS), the same service smartwatches use, so no app needs to be installed on the iPhone. Only iOS is supported for now.
+
+1. With the board powered on, open **Settings > Bluetooth** on the iPhone.
+2. Under **Other Devices**, tap **CyberClip**, then tap **Pair** when iOS asks.
+3. Play something. A banner along the bottom of the screen shows the track title and artist.
+
+The banner appears for 6 seconds when a new track starts or playback resumes, on top of whatever image or GIF is showing. It disappears when playback is paused. It is not shown while media is uploading. Long titles are shortened with "...". The banner font covers Latin, Greek, Cyrillic, and Japanese characters.
+
+The iPhone remembers the pairing and reconnects on its own when the board is in range and awake. The board accepts one Bluetooth connection at a time. To pair a different iPhone, choose **Forget This Device** on the current one first. The board only reads now-playing information. It does not expose any services of its own over Bluetooth, and Bluetooth cannot be used to send media or change settings.
+
+Bluetooth stays on whenever the board is awake, including when WiFi has been turned off for being idle. It advertises at a slow (760 ms) interval to keep its power use low. Deep sleep turns it off.
+
 ## Troubleshooting
 
 ### No serial device appears
@@ -259,7 +247,7 @@ The hotspot's WPA2 password is the access boundary for its self-hosted page. A W
 - Use Chrome or Edge on desktop.
 - Confirm the page is served through HTTPS or localhost.
 - Try a different USB cable; many charging cables do not carry data.
-- Install the CH340 driver from the chip vendor if the device is absent from Device Manager.
+- If the board is not detected, hold **BOOT**, press **RST**, then release **BOOT** to enter download mode.
 - Close Arduino Serial Monitor, PlatformIO Monitor, and other applications holding the COM port.
 
 ### Connection opens but identification fails
@@ -276,7 +264,7 @@ The physical board profile needs adjustment. Verify these constants in `firmware
 - `kOffsetX` and `kOffsetY`;
 - `kInvert`;
 - `kRgbOrder`;
-- the six TFT/backlight pins.
+- the parallel-bus, LCD power, and backlight pins.
 
 If red and blue are swapped, toggle `kRgbOrder`, rebuild, and reflash the firmware.
 
@@ -313,5 +301,7 @@ firmware/
   src/
     wifi_manager.h/.cpp   WiFi credentials, pairing token, connection lifecycle
     ws_server.h/.cpp      WebSocket transport carrying the same binary protocol
+    ble_media.h/.cpp      iPhone now-playing over BLE (Apple Media Service)
+  ams.h                   AMS constants and notification parsing
   test/
 ```

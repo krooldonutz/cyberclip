@@ -1,5 +1,6 @@
 #include <unity.h>
 
+#include "../ams.h"
 #include "../protocol.h"
 
 using namespace cyberclip;
@@ -125,6 +126,57 @@ void test_battery_percent_and_level() {
   TEST_ASSERT_EQUAL_UINT8(BATTERY_HIGH, batteryLevelFromPercent(100));
 }
 
+void test_ams_entity_update_parsing() {
+  const uint8_t notification[] = {ams::ENTITY_TRACK, ams::TRACK_TITLE, 0x01,
+                                  'S', 'o', 'n', 'g'};
+  ams::EntityUpdate update;
+  TEST_ASSERT_TRUE(
+      ams::parseEntityUpdate(notification, sizeof(notification), &update));
+  TEST_ASSERT_EQUAL_UINT8(ams::ENTITY_TRACK, update.entity);
+  TEST_ASSERT_EQUAL_UINT8(ams::TRACK_TITLE, update.attribute);
+  TEST_ASSERT_TRUE(update.truncated);
+  TEST_ASSERT_EQUAL_UINT32(4, update.valueLength);
+  TEST_ASSERT_EQUAL_MEMORY("Song", update.value, 4);
+
+  const uint8_t empty[] = {ams::ENTITY_TRACK, ams::TRACK_ARTIST, 0x00};
+  TEST_ASSERT_TRUE(ams::parseEntityUpdate(empty, sizeof(empty), &update));
+  TEST_ASSERT_FALSE(update.truncated);
+  TEST_ASSERT_EQUAL_UINT32(0, update.valueLength);
+  TEST_ASSERT_FALSE(ams::parseEntityUpdate(empty, 2, &update));
+}
+
+void test_ams_playback_state() {
+  TEST_ASSERT_EQUAL_UINT8(ams::PLAYBACK_PLAYING,
+                          ams::parsePlaybackState("1,1.0,12.5", 10));
+  TEST_ASSERT_EQUAL_UINT8(ams::PLAYBACK_PAUSED,
+                          ams::parsePlaybackState("0,0.0,3.1", 9));
+  TEST_ASSERT_EQUAL_UINT8(ams::PLAYBACK_PAUSED, ams::parsePlaybackState("0", 1));
+  TEST_ASSERT_EQUAL_UINT8(ams::PLAYBACK_UNKNOWN, ams::parsePlaybackState("", 0));
+  TEST_ASSERT_EQUAL_UINT8(ams::PLAYBACK_UNKNOWN,
+                          ams::parsePlaybackState("12,1.0", 6));
+  TEST_ASSERT_EQUAL_UINT8(ams::PLAYBACK_UNKNOWN,
+                          ams::parsePlaybackState("9,1.0", 5));
+}
+
+void test_ams_utf8_storage() {
+  // "café" is 5 bytes; cutting at 4 would split the 2-byte "é".
+  const char cafe[] = "caf\xC3\xA9";
+  TEST_ASSERT_EQUAL_UINT32(5, ams::utf8Boundary(cafe, 5, 5));
+  TEST_ASSERT_EQUAL_UINT32(3, ams::utf8Boundary(cafe, 5, 4));
+  // A 3-byte character ("あ") cut after its first or second byte.
+  const char kana[] = "a\xE3\x81\x82";
+  TEST_ASSERT_EQUAL_UINT32(1, ams::utf8Boundary(kana, 4, 2));
+  TEST_ASSERT_EQUAL_UINT32(1, ams::utf8Boundary(kana, 4, 3));
+
+  char buffer[5] = "";
+  TEST_ASSERT_TRUE(ams::storeUtf8(buffer, sizeof(buffer), cafe, 5));
+  TEST_ASSERT_EQUAL_STRING("caf", buffer);
+  TEST_ASSERT_FALSE(ams::storeUtf8(buffer, sizeof(buffer), cafe, 5));
+  TEST_ASSERT_TRUE(ams::storeUtf8(buffer, sizeof(buffer), "", 0));
+  TEST_ASSERT_EQUAL_STRING("", buffer);
+  TEST_ASSERT_FALSE(ams::storeUtf8(buffer, sizeof(buffer), "", 0));
+}
+
 void runTests() {
   UNITY_BEGIN();
   RUN_TEST(test_battery_percent_and_level);
@@ -135,6 +187,9 @@ void runTests() {
   RUN_TEST(test_wifi_command_bytes_do_not_collide);
   RUN_TEST(test_hotspot_validation_and_fallback_policy);
   RUN_TEST(test_power_policy);
+  RUN_TEST(test_ams_entity_update_parsing);
+  RUN_TEST(test_ams_playback_state);
+  RUN_TEST(test_ams_utf8_storage);
   UNITY_END();
 }
 

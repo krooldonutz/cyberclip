@@ -236,13 +236,8 @@ async function installFirmware() {
     log(`Installed Cyberclip firmware ${manifest.version}${target ? ` for ${target}` : ''}`);
     setProgress(100, 'Firmware installed');
     activeTransport = serialTransport;
-    if (manifest.chip === 'ESP32-S3') {
-      // The native USB port re-enumerates as a new "Pixie Pixel Gear" device.
-      await reconnectNativeUsb();
-    } else {
-      await abortableDelay(1000);
-      await serialTransport.connect({ port });
-    }
+    // The native USB port re-enumerates as a new "Pixie Pixel Gear" device.
+    await reconnectNativeUsb();
   } catch (error) {
     awaitingDownloadPort = error instanceof DownloadPortNotAuthorizedError;
     const message = error.name === 'NotFoundError'
