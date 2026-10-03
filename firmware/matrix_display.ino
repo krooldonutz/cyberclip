@@ -219,24 +219,23 @@ struct UploadProgress {
 } uploadProgress;
 
 // Frames are decoded off-screen and pushed to the panel in one burst, so the
-// panel never scans out a half-drawn frame (tearing). The buffer is split into
-// bands so it still fits when the heap is fragmented.
+// panel never scans out a half-drawn frame (tearing). The buffer is kept in the
+// panel's native portrait orientation and rotated frames are rotated while
+// decoding: the panel refreshes row by row in that orientation, and writing in
+// any other order makes the boundary between old and new frames diagonal. The
+// buffer is split into bands so it still fits when the heap is fragmented.
 constexpr uint8_t kFramebufferBands = 4;
-constexpr uint32_t framebufferBandPixels(uint16_t width, uint16_t height) {
-  return static_cast<uint32_t>((height + kFramebufferBands - 1) /
-                               kFramebufferBands) * width;
-}
+constexpr uint16_t kFramebufferBandRows =
+    (board::kHeight + kFramebufferBands - 1) / kFramebufferBands;
 constexpr uint32_t kFramebufferBandPixels =
-    framebufferBandPixels(board::kWidth, board::kHeight) >
-            framebufferBandPixels(board::kHeight, board::kWidth)
-        ? framebufferBandPixels(board::kWidth, board::kHeight)
-        : framebufferBandPixels(board::kHeight, board::kWidth);
+    static_cast<uint32_t>(kFramebufferBandRows) * board::kWidth;
 
 struct Framebuffer {
   uint16_t *bands[kFramebufferBands]{};
+  // Rotation of the decoded frame, and its size in that rotation.
+  uint8_t rotation = 0;
   uint16_t width = 0;
   uint16_t height = 0;
-  uint16_t bandRows = 0;
   bool allocated = false;
   // Set when the buffer holds a decoded stored frame that is not yet shown.
   bool holdsPlaylistFrame = false;
@@ -752,27 +751,55 @@ void allocateFramebuffer() {
   framebuffer.allocated = true;
 }
 
+uint16_t *framebufferPixel(int nativeX, int nativeY) {
+  return framebuffer.bands[nativeY / kFramebufferBandRows] +
+         (nativeY % kFramebufferBandRows) * board::kWidth + nativeX;
+}
+
 int jpegDraw(JPEGDRAW *draw) {
   if (jpegOutput == JpegOutput::kDisplay) {
     display.pushImage(draw->x, draw->y, draw->iWidth, draw->iHeight,
                       draw->pPixels);
   } else if (jpegOutput == JpegOutput::kFramebuffer) {
     if (draw->x >= framebuffer.width) return 1;
-    const uint16_t columns =
+    const int columns =
         min<int>(draw->iWidthUsed, framebuffer.width - draw->x);
     for (int row = 0; row < draw->iHeight; ++row) {
       const int y = draw->y + row;
       if (y >= framebuffer.height) break;
-      uint16_t *band = framebuffer.bands[y / framebuffer.bandRows];
-      memcpy(band + (y % framebuffer.bandRows) * framebuffer.width + draw->x,
-             draw->pPixels + row * draw->iWidth, columns * sizeof(uint16_t));
+      const uint16_t *source = draw->pPixels + row * draw->iWidth;
+      if (framebuffer.rotation == 0) {
+        memcpy(framebufferPixel(draw->x, y), source,
+               columns * sizeof(uint16_t));
+        continue;
+      }
+      for (int column = 0; column < columns; ++column) {
+        const int x = draw->x + column;
+        // Same mapping as LovyanGFX's rotations (Panel_FrameBufferBase).
+        int nativeX, nativeY;
+        switch (framebuffer.rotation) {
+          case 1:
+            nativeX = framebuffer.height - 1 - y;
+            nativeY = x;
+            break;
+          case 2:
+            nativeX = framebuffer.width - 1 - x;
+            nativeY = framebuffer.height - 1 - y;
+            break;
+          default:
+            nativeX = y;
+            nativeY = framebuffer.width - 1 - x;
+            break;
+        }
+        *framebufferPixel(nativeX, nativeY) = source[column];
+      }
     }
   }
   return 1;
 }
 
 bool decodeJpeg(uint8_t *data, uint32_t size, uint16_t width, uint16_t height,
-                JpegOutput output) {
+                uint8_t rotation, JpegOutput output) {
   if (!jpeg.openRAM(data, static_cast<int>(size), jpegDraw)) return false;
   const bool dimensionsOk =
       jpeg.getWidth() == width && jpeg.getHeight() == height;
@@ -781,9 +808,9 @@ bool decodeJpeg(uint8_t *data, uint32_t size, uint16_t width, uint16_t height,
     jpeg.setPixelType(RGB565_BIG_ENDIAN);
     if (output == JpegOutput::kFramebuffer) {
       framebuffer.holdsPlaylistFrame = false;
+      framebuffer.rotation = rotation;
       framebuffer.width = width;
       framebuffer.height = height;
-      framebuffer.bandRows = kFramebufferBandPixels / width;
     }
     jpegOutput = output;
     if (output == JpegOutput::kDisplay) display.startWrite();
@@ -795,29 +822,34 @@ bool decodeJpeg(uint8_t *data, uint32_t size, uint16_t width, uint16_t height,
   return dimensionsOk && decoded;
 }
 
-void presentFramebuffer(uint8_t rotation) {
-  display.setRotation(rotation);
+void presentFramebuffer() {
+  display.setRotation(0);
   display.startWrite();
-  for (uint16_t y = 0, band = 0; y < framebuffer.height;
-       y += framebuffer.bandRows, ++band) {
-    const uint16_t rows = min<int>(framebuffer.bandRows, framebuffer.height - y);
-    display.pushImage(0, y, framebuffer.width, rows, framebuffer.bands[band]);
+  for (uint16_t y = 0, band = 0; y < board::kHeight;
+       y += kFramebufferBandRows, ++band) {
+    const uint16_t rows = min<int>(kFramebufferBandRows, board::kHeight - y);
+    display.pushImage(0, y, board::kWidth, rows, framebuffer.bands[band]);
   }
   display.endWrite();
+  // Later drawing (overlays, text) uses the frame's own orientation.
+  display.setRotation(framebuffer.rotation);
   framebuffer.holdsPlaylistFrame = false;
 }
 
 bool decodeJpegBuffer(uint8_t *data, uint32_t size, uint16_t width,
                       uint16_t height, uint8_t rotation, bool render) {
-  if (!render) return decodeJpeg(data, size, width, height, JpegOutput::kDiscard);
+  if (!render) {
+    return decodeJpeg(data, size, width, height, rotation, JpegOutput::kDiscard);
+  }
   if (!framebuffer.allocated) {
     display.setRotation(rotation);
-    return decodeJpeg(data, size, width, height, JpegOutput::kDisplay);
+    return decodeJpeg(data, size, width, height, rotation, JpegOutput::kDisplay);
   }
-  if (!decodeJpeg(data, size, width, height, JpegOutput::kFramebuffer)) {
+  if (!decodeJpeg(data, size, width, height, rotation,
+                  JpegOutput::kFramebuffer)) {
     return false;
   }
-  presentFramebuffer(rotation);
+  presentFramebuffer();
   return true;
 }
 
@@ -869,7 +901,8 @@ bool decodePlaylistFrame(const Playlist &playlist, uint16_t frameIndex,
   const bool decoded =
       render ? decodeJpegBuffer(data, size, width, height, playlist.rotation,
                                 true)
-             : decodeJpeg(data, size, width, height, JpegOutput::kFramebuffer);
+             : decodeJpeg(data, size, width, height, playlist.rotation,
+                          JpegOutput::kFramebuffer);
   free(data);
   return decoded;
 }
@@ -893,7 +926,7 @@ bool renderPlaylistFrame(const Playlist &playlist, uint16_t frameIndex) {
   if (framebuffer.holdsPlaylistFrame &&
       framebuffer.generation == playlist.generation &&
       framebuffer.frameIndex == frameIndex && playlist.valid) {
-    presentFramebuffer(playlist.rotation);
+    presentFramebuffer();
   } else if (!decodePlaylistFrame(playlist, frameIndex, true)) {
     return false;
   }
