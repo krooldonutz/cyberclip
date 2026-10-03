@@ -1,0 +1,128 @@
+name: Firmware
+
+# Builds the firmware for every board on pull requests that change it, and
+# commits the versioned release images back to the pull request branch so
+# merging the pull request publishes them to the web installer.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - firmware/**
+      - '!firmware/generated/**'
+      # The device upload page is embedded in the firmware image.
+      - public/device.html
+      - src/deviceApp.js
+      - src/gifs.js
+      - src/images.js
+      - src/protocol.js
+      - src/wifiTransport.js
+      - src/styles.css
+      - vite.device.config.js
+      - package-lock.json
+      - scripts/build_firmware.py
+      - .github/workflows/firmware.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: firmware-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  BASE_REF: ${{ github.event.pull_request.base.ref }}
+  HEAD_REF: ${{ github.event.pull_request.head.ref }}
+  # Pull requests from forks are built but not committed to: the workflow
+  # token cannot push to a fork.
+  CAN_PUSH: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+
+jobs:
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Check whether the firmware inputs changed since the last build
+        id: changes
+        run: |
+          git fetch --quiet "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            "+refs/heads/$BASE_REF:refs/remotes/upstream/$BASE_REF"
+          last_build=$(git log -1 --format=%H --grep='^Build firmware ' \
+            "upstream/$BASE_REF..HEAD" -- public/firmware/manifest.json)
+          if [ -n "$last_build" ] && git diff --quiet "$last_build" HEAD -- \
+              firmware ':!firmware/generated' public/device.html \
+              src/deviceApp.js src/gifs.js src/images.js src/protocol.js \
+              src/wifiTransport.js src/styles.css vite.device.config.js \
+              package-lock.json scripts/build_firmware.py; then
+            echo "Firmware is already built for this pull request."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Choose the firmware version
+        if: steps.changes.outputs.build == 'true'
+        id: version
+        run: |
+          base_version=$(git show "upstream/$BASE_REF:public/firmware/manifest.json" | jq -r .version)
+          head_version=$(jq -r .version public/firmware/manifest.json)
+          newest=$(printf '%s\n%s\n' "$base_version" "$head_version" | sort -V | tail -1)
+          if [ "$head_version" != "$base_version" ] && [ "$newest" = "$head_version" ]; then
+            # This pull request already claimed a version; rebuild it in place.
+            echo "version=$head_version" >> "$GITHUB_OUTPUT"
+            echo "flags=--rebuild" >> "$GITHUB_OUTPUT"
+          else
+            IFS=. read -r major minor patch <<< "$newest"
+            echo "version=$major.$minor.$((patch + 1))" >> "$GITHUB_OUTPUT"
+            echo "flags=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.changes.outputs.build == 'true'
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        if: steps.changes.outputs.build == 'true'
+        with:
+          python-version: '3.12'
+
+      - uses: actions/cache@v4
+        if: steps.changes.outputs.build == 'true'
+        with:
+          path: ~/.platformio
+          key: platformio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
+
+      - name: Install dependencies
+        if: steps.changes.outputs.build == 'true'
+        run: |
+          npm ci
+          pip install platformio
+
+      - name: Run web tests
+        if: steps.changes.outputs.build == 'true'
+        run: npm test
+
+      - name: Build firmware ${{ steps.version.outputs.version }}
+        if: steps.changes.outputs.build == 'true'
+        run: python scripts/build_firmware.py $FLAGS "$VERSION"
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          FLAGS: ${{ steps.version.outputs.flags }}
+
+      - name: Commit firmware to the pull request
+        if: steps.changes.outputs.build == 'true' && env.CAN_PUSH == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A firmware public
+          git commit -m "Build firmware $VERSION"
+          # Fails if the branch moved on; the run for the newer push rebuilds.
+          git push origin "HEAD:refs/heads/$HEAD_REF"

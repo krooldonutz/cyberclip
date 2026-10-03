@@ -119,8 +119,11 @@ command from the repository root (macOS, Linux, or Windows):
 python3 scripts/build_firmware.py <major>.<minor>.<patch>
 ```
 
-Or run the **Release firmware** GitHub Actions workflow with the version; it
-runs the same script and opens a pull request with the results.
+You usually don't need to run it yourself: on every pull request that changes
+the firmware or the embedded device page, the **Firmware** GitHub Actions
+workflow runs this script with the next patch version and commits the images
+to the pull request branch (later pushes rebuild that same version). Merging
+the pull request publishes the firmware. Pull it before pushing again.
 
 Python 3.8+ and npm are required. The script installs
 [PlatformIO Core](https://platformio.org/) with pip when needed, builds the

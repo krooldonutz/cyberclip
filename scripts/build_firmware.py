@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build versioned, merged Cyberclip firmware images for the web installer.
 
-Usage: python3 scripts/build_firmware.py <major>.<minor>.<patch>
+Usage: python3 scripts/build_firmware.py [--rebuild] <major>.<minor>.<patch>
 
 Works on macOS, Linux, and Windows. Requires Python 3.8+, npm, and PlatformIO
 Core (installed with pip when it is missing).
@@ -193,7 +193,7 @@ def parse_version(text):
     return parts
 
 
-def build_release(version):
+def build_release(version, rebuild=False):
     version_parts = parse_version(version)
     for required_path in (FIRMWARE_SOURCE_PATH, DEVICE_WEB_HEADER_PATH,
                           MANIFEST_PATH, SERVICE_WORKER_PATH):
@@ -206,7 +206,8 @@ def build_release(version):
     original_service_worker = read_text(SERVICE_WORKER_PATH)
     manifest = json.loads(original_manifest)
     current_parts = tuple(int(part) for part in manifest['version'].split('.'))
-    if version_parts <= current_parts:
+    if version_parts < current_parts or (
+            version_parts == current_parts and not rebuild):
         raise ReleaseError(
             f'Version {version} must be newer than the current published '
             f'version {manifest["version"]}.')
@@ -224,7 +225,8 @@ def build_release(version):
         target['binary_path'] = REPOSITORY_ROOT / 'public' / target['web_path'].lstrip('/')
         target['temporary_path'] = target['binary_path'].with_name(
             target['binary_path'].name + '.tmp')
-        if target['binary_path'].exists():
+        target['existed'] = target['binary_path'].exists()
+        if target['existed'] and not rebuild:
             raise ReleaseError(
                 f'Refusing to overwrite existing release image: {target["binary_path"]}')
 
@@ -358,15 +360,19 @@ def build_release(version):
             write_text(SERVICE_WORKER_PATH, original_service_worker)
             for target in targets:
                 target['temporary_path'].unlink(missing_ok=True)
-                target['binary_path'].unlink(missing_ok=True)
+                if not target['existed']:
+                    target['binary_path'].unlink(missing_ok=True)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('version', help='new firmware version, e.g. 2.0.22')
+    parser.add_argument(
+        '--rebuild', action='store_true',
+        help='allow rebuilding the currently published version in place')
     args = parser.parse_args()
     try:
-        build_release(args.version)
+        build_release(args.version, args.rebuild)
     except (ReleaseError, subprocess.CalledProcessError) as error:
         print(f'error: {error}', file=sys.stderr)
         return 1
