@@ -113,13 +113,16 @@ Web Serial is not currently supported by Firefox or Safari. Connecting always re
 ### Building the firmware
 
 Create a versioned, merged firmware image for the web installer with one
-PowerShell command from the repository root:
+command from the repository root (macOS, Linux, or Windows):
 
-```powershell
-.\scripts\build-firmware.ps1 <major>.<minor>.<patch>
+```sh
+python3 scripts/build_firmware.py <major>.<minor>.<patch>
 ```
 
-Python 3 is required. The script installs
+Or run the **Release firmware** GitHub Actions workflow with the version; it
+runs the same script and opens a pull request with the results.
+
+Python 3.8+ and npm are required. The script installs
 [PlatformIO Core](https://platformio.org/) with pip when needed, builds the
 firmware for every supported board (`ideaspark_esp32` and
 `lilygo_t_display_s3`), merges each board's boot components into its own image,
