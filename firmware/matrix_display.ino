@@ -246,6 +246,15 @@ struct ScreenState {
 struct {
   bool visible = false;
   uint8_t rotation = 0;
+  // Progress bar geometry from the last full draw, so the bar and times can
+  // be updated without redrawing the rest.
+  bool hasProgress = false;
+  int16_t barX = 0;
+  int16_t barY = 0;
+  int16_t barWidth = 0;
+  int16_t timesY = 0;
+  int32_t shownSecond = -1;
+  int16_t shownFill = -1;
 } nowPlayingScreen;
 
 // Stored GIF playback that is actually advancing on the panel.
@@ -466,6 +475,9 @@ constexpr uint8_t kNowPlayingScreenIconScale = 3;
 constexpr uint8_t kNowPlayingScreenTitleLines = 3;
 constexpr uint8_t kNowPlayingScreenArtistLines = 2;
 constexpr int16_t kNowPlayingScreenPadding = 10;
+constexpr int16_t kNowPlayingBarHeight = 4;
+constexpr uint16_t kNowPlayingBarColor = 0x05ff;       // same cyan as uploads
+constexpr uint16_t kNowPlayingBarTrackColor = 0x39E7;  // dark grey
 constexpr size_t kFittedTextSize = kNowPlayingTextSize + 3;
 
 struct {
@@ -629,6 +641,59 @@ void hideNowPlayingOverlay() {
                       nowPlayingOverlay.rotation);
 }
 
+float nowPlayingElapsed(const NowPlaying &info) {
+  const bool advancing = info.playback == ams::PLAYBACK_PLAYING ||
+                         info.playback == ams::PLAYBACK_REWINDING ||
+                         info.playback == ams::PLAYBACK_FAST_FORWARDING;
+  ams::PlaybackInfo position = info.position;
+  if (!advancing) position.rate = 0;
+  return ams::extrapolateElapsed(position, millis() - info.positionAtMs,
+                                 info.durationSeconds);
+}
+
+// Redraws the bar and times when the second or the filled width changed.
+void drawNowPlayingProgress(bool force) {
+  const NowPlaying &info = nowPlayingOverlay.latest;
+  if (!nowPlayingScreen.hasProgress || info.durationSeconds <= 0) return;
+  const float elapsed = nowPlayingElapsed(info);
+  const int32_t second = static_cast<int32_t>(elapsed);
+  const int16_t fill = static_cast<int16_t>(
+      nowPlayingScreen.barWidth * (elapsed / info.durationSeconds));
+  if (!force && second == nowPlayingScreen.shownSecond &&
+      fill == nowPlayingScreen.shownFill) {
+    return;
+  }
+  nowPlayingScreen.shownSecond = second;
+  nowPlayingScreen.shownFill = fill;
+
+  char elapsedText[12];
+  char durationText[12];
+  ams::formatTrackTime(elapsed, elapsedText, sizeof(elapsedText));
+  ams::formatTrackTime(info.durationSeconds, durationText,
+                       sizeof(durationText));
+
+  display.setRotation(nowPlayingScreen.rotation);
+  display.startWrite();
+  const int16_t x = nowPlayingScreen.barX;
+  const int16_t y = nowPlayingScreen.barY;
+  const int16_t width = nowPlayingScreen.barWidth;
+  display.fillRect(x, y, fill, kNowPlayingBarHeight, kNowPlayingBarColor);
+  display.fillRect(x + fill, y, width - fill, kNowPlayingBarHeight,
+                   kNowPlayingBarTrackColor);
+  display.setFont(kNowPlayingFont);
+  display.setTextSize(1);
+  display.fillRect(x, nowPlayingScreen.timesY, width, display.fontHeight(),
+                   TFT_BLACK);
+  display.setTextColor(kNowPlayingArtistColor, TFT_BLACK);
+  display.setTextDatum(top_left);
+  display.drawString(elapsedText, x, nowPlayingScreen.timesY);
+  display.setTextDatum(top_right);
+  display.drawString(durationText, x + width, nowPlayingScreen.timesY);
+  display.setTextDatum(top_left);
+  display.setFont(&fonts::Font0);
+  display.endWrite();
+}
+
 void drawNowPlayingScreen() {
   display.setRotation(nowPlayingScreen.rotation);
   const NowPlaying &info = nowPlayingOverlay.latest;
@@ -636,44 +701,72 @@ void drawNowPlayingScreen() {
   const int16_t textWidth = width - kNowPlayingScreenPadding * 2;
   char titleLines[kNowPlayingScreenTitleLines][kFittedTextSize];
   char artistLines[kNowPlayingScreenArtistLines][kFittedTextSize];
+  const bool hasProgress = info.durationSeconds > 0;
 
   display.setTextSize(1);
   display.setFont(kNowPlayingTitleFont);
-  const uint8_t titleCount = wrapText(info.title, textWidth,
-                                      kNowPlayingScreenTitleLines, titleLines);
   const int16_t titleLineHeight = display.fontHeight() + 2;
   display.setFont(kNowPlayingFont);
-  const uint8_t artistCount = wrapText(
-      info.artist, textWidth, kNowPlayingScreenArtistLines, artistLines);
-  const int16_t artistLineHeight = display.fontHeight() + 2;
+  const int16_t smallLineHeight = display.fontHeight() + 2;
 
   constexpr int16_t kIconWidth = 13 * kNowPlayingScreenIconScale;
   constexpr int16_t kIconHeight = 15 * kNowPlayingScreenIconScale;
-  const int16_t blockHeight = kIconHeight + 14 + titleCount * titleLineHeight +
-                              (artistCount ? 6 : 0) +
-                              artistCount * artistLineHeight;
-  int16_t y = (display.height() - blockHeight) / 2;
+  constexpr int16_t kIconGap = 14;
+  constexpr int16_t kArtistGap = 6;
+  constexpr int16_t kProgressGap = 12;
+  const int16_t progressHeight =
+      hasProgress ? kProgressGap + kNowPlayingBarHeight + 4 + smallLineHeight
+                  : 0;
+
+  // Fewer lines in landscape, where everything does not fit.
+  uint8_t titleCount = 0;
+  uint8_t artistCount = 0;
+  int16_t blockHeight = 0;
+  for (uint8_t titleMax = kNowPlayingScreenTitleLines; titleMax > 0;
+       --titleMax) {
+    const uint8_t artistMax =
+        titleMax == kNowPlayingScreenTitleLines ? kNowPlayingScreenArtistLines
+                                                : 1;
+    display.setFont(kNowPlayingTitleFont);
+    titleCount = wrapText(info.title, textWidth, titleMax, titleLines);
+    display.setFont(kNowPlayingFont);
+    artistCount = wrapText(info.artist, textWidth, artistMax, artistLines);
+    blockHeight = kIconHeight + kIconGap + titleCount * titleLineHeight +
+                  (artistCount ? kArtistGap : 0) +
+                  artistCount * smallLineHeight + progressHeight;
+    if (blockHeight <= display.height() - 8) break;
+  }
+  int16_t y = max<int16_t>(4, (display.height() - blockHeight) / 2);
 
   display.startWrite();
   display.fillScreen(TFT_BLACK);
   drawNoteIcon((width - kIconWidth) / 2, y, kNowPlayingScreenIconScale,
                TFT_WHITE);
-  y += kIconHeight + 14;
+  y += kIconHeight + kIconGap;
   display.setTextDatum(top_center);
   display.setFont(kNowPlayingTitleFont);
   display.setTextColor(TFT_WHITE, TFT_BLACK);
   for (uint8_t i = 0; i < titleCount; ++i, y += titleLineHeight) {
     display.drawString(titleLines[i], width / 2, y);
   }
-  y += 6;
+  if (artistCount) y += kArtistGap;
   display.setFont(kNowPlayingFont);
   display.setTextColor(kNowPlayingArtistColor, TFT_BLACK);
-  for (uint8_t i = 0; i < artistCount; ++i, y += artistLineHeight) {
+  for (uint8_t i = 0; i < artistCount; ++i, y += smallLineHeight) {
     display.drawString(artistLines[i], width / 2, y);
   }
   display.setTextDatum(top_left);
   display.setFont(&fonts::Font0);
   display.endWrite();
+
+  nowPlayingScreen.hasProgress = hasProgress;
+  if (hasProgress) {
+    nowPlayingScreen.barX = kNowPlayingScreenPadding;
+    nowPlayingScreen.barY = y + kProgressGap;
+    nowPlayingScreen.barWidth = textWidth;
+    nowPlayingScreen.timesY = nowPlayingScreen.barY + kNowPlayingBarHeight + 4;
+    drawNowPlayingProgress(true);
+  }
 }
 
 void showNowPlayingScreen() {
@@ -735,6 +828,17 @@ void pollNowPlaying() {
     if (nowPlayingOverlay.visible && nowPlayingOverlay.onButton &&
         !nowPlayingScreen.visible) {
       drawNowPlayingOverlay();
+    }
+  }
+
+  if (nowPlayingScreen.visible && !nowPlayingOverlay.pending) {
+    // The track length can arrive after the title and artist.
+    if ((nowPlayingOverlay.latest.durationSeconds > 0) !=
+        nowPlayingScreen.hasProgress) {
+      drawNowPlayingScreen();
+      drawOverlays();
+    } else {
+      drawNowPlayingProgress(false);
     }
   }
 

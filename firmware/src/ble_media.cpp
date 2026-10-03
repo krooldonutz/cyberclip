@@ -172,25 +172,48 @@ void BleMedia::subscribePendingConnection() {
 void BleMedia::onEntityUpdate(const uint8_t *data, size_t length) {
   ams::EntityUpdate update;
   if (!ams::parseEntityUpdate(data, length, &update)) return;
+  const bool isTrack = update.entity == ams::ENTITY_TRACK;
+  const bool isPlaybackInfo = update.entity == ams::ENTITY_PLAYER &&
+                              update.attribute == ams::PLAYER_PLAYBACK_INFO;
+
+  // Numbers are parsed before taking the lock, which disables interrupts.
+  float duration = 0;
+  if (isTrack && update.attribute == ams::TRACK_DURATION &&
+      !ams::parseSeconds(update.value, update.valueLength, &duration)) {
+    duration = 0;
+  }
+  ams::PlaybackInfo position;
+  const bool hasPosition =
+      isPlaybackInfo &&
+      ams::parsePlaybackInfo(update.value, update.valueLength, &position);
+  const uint8_t playback =
+      isPlaybackInfo ? ams::parsePlaybackState(update.value, update.valueLength)
+                     : ams::PLAYBACK_UNKNOWN;
+  const uint32_t receivedAt = millis();
 
   portENTER_CRITICAL(&stateLock);
   bool changed = false;
-  if (update.entity == ams::ENTITY_TRACK) {
+  if (isTrack) {
     if (update.attribute == ams::TRACK_TITLE) {
       changed = ams::storeUtf8(state_.title, sizeof(state_.title),
                                update.value, update.valueLength);
     } else if (update.attribute == ams::TRACK_ARTIST) {
       changed = ams::storeUtf8(state_.artist, sizeof(state_.artist),
                                update.value, update.valueLength);
+    } else if (update.attribute == ams::TRACK_DURATION) {
+      changed = duration != state_.durationSeconds;
+      state_.durationSeconds = duration;
     }
-  } else if (update.entity == ams::ENTITY_PLAYER &&
-             update.attribute == ams::PLAYER_PLAYBACK_INFO) {
-    const uint8_t playback =
-        ams::parsePlaybackState(update.value, update.valueLength);
-    if (playback != ams::PLAYBACK_UNKNOWN && playback != state_.playback) {
-      state_.playback = playback;
-      changed = true;
-    }
+  } else if (hasPosition) {
+    // Sent on play, pause, and seek; the position advances locally between.
+    state_.playback = position.state;
+    state_.position = position;
+    state_.positionAtMs = receivedAt;
+    changed = true;
+  } else if (playback != ams::PLAYBACK_UNKNOWN &&
+             playback != state_.playback) {
+    state_.playback = playback;
+    changed = true;
   }
   if (changed) markChanged();
   portEXIT_CRITICAL(&stateLock);

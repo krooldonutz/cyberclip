@@ -158,6 +158,42 @@ void test_ams_playback_state() {
                           ams::parsePlaybackState("9,1.0", 5));
 }
 
+void test_ams_playback_info_and_time() {
+  ams::PlaybackInfo info;
+  TEST_ASSERT_TRUE(ams::parsePlaybackInfo("1,1.000,42.500", 14, &info));
+  TEST_ASSERT_EQUAL_UINT8(ams::PLAYBACK_PLAYING, info.state);
+  TEST_ASSERT_EQUAL_FLOAT(1.0f, info.rate);
+  TEST_ASSERT_EQUAL_FLOAT(42.5f, info.elapsedSeconds);
+  TEST_ASSERT_TRUE(ams::parsePlaybackInfo("2,-2.0,10", 9, &info));
+  TEST_ASSERT_EQUAL_FLOAT(-2.0f, info.rate);
+  TEST_ASSERT_FALSE(ams::parsePlaybackInfo("1,1.0", 5, &info));
+  TEST_ASSERT_FALSE(ams::parsePlaybackInfo("1,x,3", 5, &info));
+  TEST_ASSERT_FALSE(ams::parsePlaybackInfo("1", 1, &info));
+
+  float seconds = 0;
+  TEST_ASSERT_TRUE(ams::parseSeconds("245.123", 7, &seconds));
+  TEST_ASSERT_EQUAL_FLOAT(245.123f, seconds);
+  TEST_ASSERT_FALSE(ams::parseSeconds("", 0, &seconds));
+  TEST_ASSERT_FALSE(ams::parseSeconds("abc", 3, &seconds));
+  TEST_ASSERT_FALSE(ams::parseSeconds("-1", 2, &seconds));
+
+  ams::PlaybackInfo playing;
+  playing.rate = 1.0f;
+  playing.elapsedSeconds = 10.0f;
+  TEST_ASSERT_EQUAL_FLOAT(12.5f, ams::extrapolateElapsed(playing, 2500, 200));
+  TEST_ASSERT_EQUAL_FLOAT(200.0f, ams::extrapolateElapsed(playing, 999000, 200));
+  playing.rate = -2.0f;
+  TEST_ASSERT_EQUAL_FLOAT(0.0f, ams::extrapolateElapsed(playing, 9000, 200));
+
+  char text[12];
+  ams::formatTrackTime(65.9f, text, sizeof(text));
+  TEST_ASSERT_EQUAL_STRING("1:05", text);
+  ams::formatTrackTime(3725.0f, text, sizeof(text));
+  TEST_ASSERT_EQUAL_STRING("1:02:05", text);
+  ams::formatTrackTime(-3.0f, text, sizeof(text));
+  TEST_ASSERT_EQUAL_STRING("0:00", text);
+}
+
 void test_ams_utf8_storage() {
   // "café" is 5 bytes; cutting at 4 would split the 2-byte "é".
   const char cafe[] = "caf\xC3\xA9";
@@ -193,6 +229,7 @@ void runTests() {
   RUN_TEST(test_power_policy);
   RUN_TEST(test_ams_entity_update_parsing);
   RUN_TEST(test_ams_playback_state);
+  RUN_TEST(test_ams_playback_info_and_time);
   RUN_TEST(test_ams_utf8_storage);
   UNITY_END();
 }

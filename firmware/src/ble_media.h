@@ -15,6 +15,12 @@ struct NowPlaying {
   uint8_t playback = ams::PLAYBACK_UNKNOWN;
   char title[kNowPlayingTextSize] = {};
   char artist[kNowPlayingTextSize] = {};
+  // 0 when iOS has not reported a length (for example, a live stream).
+  float durationSeconds = 0;
+  // Position and rate from the last PlaybackInfo, received at
+  // positionAtMs (millis()); see ams::extrapolateElapsed().
+  ams::PlaybackInfo position;
+  uint32_t positionAtMs = 0;
   // Incremented whenever any field above changes.
   uint32_t revision = 0;
 };

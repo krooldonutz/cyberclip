@@ -2,6 +2,8 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 // Apple Media Service (AMS): the GATT service an iPhone exposes to a paired
@@ -49,7 +51,7 @@ constexpr uint8_t kEntityUpdateFlagTruncated = 0x01;
 
 // Entity Update writes that register for the attributes Cyberclip shows.
 constexpr uint8_t kTrackSubscription[] = {ENTITY_TRACK, TRACK_ARTIST,
-                                          TRACK_TITLE};
+                                          TRACK_TITLE, TRACK_DURATION};
 constexpr uint8_t kPlayerSubscription[] = {ENTITY_PLAYER,
                                            PLAYER_PLAYBACK_INFO};
 
@@ -80,6 +82,81 @@ inline PlaybackState parsePlaybackState(const char *value, size_t length) {
   }
   if (length > 1 && value[1] != ',') return PLAYBACK_UNKNOWN;
   return static_cast<PlaybackState>(value[0] - '0');
+}
+
+// Parses a decimal number of seconds such as "245.123". Returns false for
+// an empty, malformed, or negative value.
+inline bool parseSeconds(const char *value, size_t length, float *seconds) {
+  if (!value || !seconds || length == 0 || length > 31) return false;
+  char buffer[32];
+  memcpy(buffer, value, length);
+  buffer[length] = '\0';
+  char *end = nullptr;
+  const float parsed = strtof(buffer, &end);
+  if (end == buffer || *end != '\0' || !(parsed >= 0)) return false;
+  *seconds = parsed;
+  return true;
+}
+
+struct PlaybackInfo {
+  PlaybackState state = PLAYBACK_UNKNOWN;
+  float rate = 0;
+  float elapsedSeconds = 0;
+};
+
+// Parses all of "<state>,<rate>,<elapsed seconds>". The elapsed time is
+// where playback was when iOS sent it; it advances at *rate* afterwards.
+inline bool parsePlaybackInfo(const char *value, size_t length,
+                              PlaybackInfo *info) {
+  if (!info) return false;
+  const PlaybackState state = parsePlaybackState(value, length);
+  if (state == PLAYBACK_UNKNOWN || length < 2) return false;
+  const char *rate = value + 2;
+  const char *comma =
+      static_cast<const char *>(memchr(rate, ',', length - 2));
+  if (!comma) return false;
+  const char *elapsed = comma + 1;
+  const size_t elapsedLength = value + length - elapsed;
+  // The rate is negative while rewinding.
+  char buffer[32];
+  const size_t rateLength = comma - rate;
+  if (rateLength == 0 || rateLength > 31) return false;
+  memcpy(buffer, rate, rateLength);
+  buffer[rateLength] = '\0';
+  char *end = nullptr;
+  const float parsedRate = strtof(buffer, &end);
+  if (end == buffer || *end != '\0') return false;
+  float parsedElapsed = 0;
+  if (!parseSeconds(elapsed, elapsedLength, &parsedElapsed)) return false;
+  info->state = state;
+  info->rate = parsedRate;
+  info->elapsedSeconds = parsedElapsed;
+  return true;
+}
+
+// Position *sinceMs* after a PlaybackInfo update, clamped to the track.
+inline float extrapolateElapsed(const PlaybackInfo &info, uint32_t sinceMs,
+                                float durationSeconds) {
+  float elapsed = info.elapsedSeconds + info.rate * (sinceMs / 1000.0f);
+  if (elapsed < 0) elapsed = 0;
+  if (durationSeconds > 0 && elapsed > durationSeconds) {
+    elapsed = durationSeconds;
+  }
+  return elapsed;
+}
+
+// Formats seconds as "m:ss" (or "h:mm:ss" from an hour).
+inline void formatTrackTime(float seconds, char *out, size_t capacity) {
+  if (!out || capacity == 0) return;
+  const unsigned long total = seconds > 0 ? static_cast<unsigned long>(seconds) : 0;
+  const unsigned long hours = total / 3600;
+  const unsigned long minutes = (total / 60) % 60;
+  const unsigned long secs = total % 60;
+  if (hours > 0) {
+    snprintf(out, capacity, "%lu:%02lu:%02lu", hours, minutes, secs);
+  } else {
+    snprintf(out, capacity, "%lu:%02lu", minutes, secs);
+  }
 }
 
 // Largest length <= maxLength that does not split a UTF-8 sequence.

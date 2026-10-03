@@ -232,7 +232,9 @@ The board can show the title and artist of whatever an iPhone is playing (Music,
 
 1. With the board powered on, open **Settings > Bluetooth** on the iPhone.
 2. Under **Other Devices**, tap **CyberClip**, then tap **Pair** when iOS asks.
-3. Play something. The screen switches to a now-playing view with the track title and artist.
+3. Play something. The screen switches to a now-playing view with the track title and artist, and a progress bar with the elapsed time and track length.
+
+The progress bar uses the position iOS sends on play, pause, and seek, and counts forward on the board in between. Tracks without a length, such as live radio, show no bar. Album artwork is not shown: Apple Media Service only provides text, not images.
 
 While music is playing, the now-playing view replaces the image or GIF. When playback is paused or the iPhone disconnects, the media comes back and a saved GIF resumes. Sending new media, an upload, or a button message takes over the screen until the next track starts or playback resumes. The view is not shown while media is uploading.
 
