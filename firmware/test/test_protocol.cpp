@@ -2,6 +2,7 @@
 
 #include "../ams.h"
 #include "../protocol.h"
+#include "../visualizer.h"
 
 using namespace cyberclip;
 
@@ -217,6 +218,42 @@ void test_ams_utf8_storage() {
   TEST_ASSERT_FALSE(ams::storeUtf8(buffer, sizeof(buffer), "", 0));
 }
 
+void test_visualizer_wave_and_color() {
+  using namespace visualizer;
+  WaveParams params;
+  params.speed1 = 3.0f;
+  params.speed2 = 5.0f;
+  params.cycles1 = 1.0f;
+  params.cycles2 = 2.0f;
+  params.phase1 = 0.0f;
+  params.phase2 = 0.0f;
+  // sin(0) = 0 and cos(0) = 1 at t = 0, position 0.
+  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 0.70f, waveLevel(params, 0, 0));
+  for (int i = 0; i <= 100; ++i) {
+    const float level = waveLevel(params, i * 0.137f, i / 100.0f);
+    TEST_ASSERT_TRUE(level >= 0.1f - 0.0001f && level <= 1.0f + 0.0001f);
+  }
+
+  const uint32_t low[6] = {0, 0, 0, 0, 0, 0};
+  const WaveParams lowest = randomWaveParams(low);
+  TEST_ASSERT_EQUAL_FLOAT(2.0f, lowest.speed1);
+  TEST_ASSERT_EQUAL_FLOAT(0.5f, lowest.cycles1);
+  const uint32_t high[6] = {0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+                            0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF};
+  const WaveParams highest = randomWaveParams(high);
+  TEST_ASSERT_TRUE(highest.speed1 <= 5.0f && highest.speed2 <= 7.0f);
+
+  TEST_ASSERT_EQUAL_HEX16(0xF800, hsvToRgb565(0, 1, 1));
+  TEST_ASSERT_EQUAL_HEX16(0x07E0, hsvToRgb565(120, 1, 1));
+  TEST_ASSERT_EQUAL_HEX16(0x001F, hsvToRgb565(240, 1, 1));
+  TEST_ASSERT_EQUAL_HEX16(0xFFFF, hsvToRgb565(77, 0, 1));
+  TEST_ASSERT_EQUAL_HEX16(0xF800, hsvToRgb565(360, 1, 1));
+  // Saturation is capped, so a song color is never pure white or black.
+  const uint16_t color = randomSongColor(0x80000000, 0);
+  TEST_ASSERT_NOT_EQUAL(0xFFFF, color);
+  TEST_ASSERT_NOT_EQUAL(0x0000, color);
+}
+
 void runTests() {
   UNITY_BEGIN();
   RUN_TEST(test_battery_percent_and_level);
@@ -231,6 +268,7 @@ void runTests() {
   RUN_TEST(test_ams_playback_state);
   RUN_TEST(test_ams_playback_info_and_time);
   RUN_TEST(test_ams_utf8_storage);
+  RUN_TEST(test_visualizer_wave_and_color);
   UNITY_END();
 }
 

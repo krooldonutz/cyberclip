@@ -234,6 +234,8 @@ The board can show the title and artist of whatever an iPhone is playing (Music,
 2. Under **Other Devices**, tap **CyberClip**, then tap **Pair** when iOS asks.
 3. Play something. The screen switches to a now-playing view with the track title and artist, and a progress bar with the elapsed time and track length.
 
+Above the title, an animated wave of bars moves while the music plays. iOS does not share audio levels, so the wave is not driven by the music. It follows a sine wave and a cosine wave whose speeds, shapes, and phases are randomized for each song. Each new song also gets a new random color, used by the wave and the progress bar. Resuming the same song keeps its color. Set `kNowPlayingWave` to `false` to show a still music-note icon instead.
+
 The progress bar uses the position iOS sends on play, pause, and seek, and counts forward on the board in between. Tracks without a length, such as live radio, show no bar. Album artwork is not shown: Apple Media Service only provides text, not images.
 
 While music is playing, the now-playing view replaces the image or GIF. When playback is paused or the iPhone disconnects, the media comes back and a saved GIF resumes. Sending new media, an upload, or a button message takes over the screen until the next track starts or playback resumes. The view is not shown while media is uploading.

@@ -9,6 +9,7 @@
 #include <esp32-hal-cpu.h>
 
 #include "protocol.h"
+#include "visualizer.h"
 #include "src/ble_media.h"
 #include "src/wifi_manager.h"
 #include "src/ws_server.h"
@@ -255,6 +256,13 @@ struct {
   int16_t timesY = 0;
   int32_t shownSecond = -1;
   int16_t shownFill = -1;
+  // Wave area from the last full draw, and the per-song look.
+  int16_t waveX = 0;
+  int16_t waveY = 0;
+  int16_t waveWidth = 0;
+  uint32_t waveDrawnAt = 0;
+  visualizer::WaveParams wave;
+  uint16_t color = 0x05ff;
 } nowPlayingScreen;
 
 // Stored GIF playback that is actually advancing on the panel.
@@ -476,7 +484,12 @@ constexpr uint8_t kNowPlayingScreenTitleLines = 3;
 constexpr uint8_t kNowPlayingScreenArtistLines = 2;
 constexpr int16_t kNowPlayingScreenPadding = 10;
 constexpr int16_t kNowPlayingBarHeight = 4;
-constexpr uint16_t kNowPlayingBarColor = 0x05ff;       // same cyan as uploads
+// Animated sine/cosine wave instead of the note icon on the full screen.
+constexpr bool kNowPlayingWave = true;
+constexpr int16_t kWaveHeight = 40;
+constexpr int16_t kWaveBarWidth = 4;
+constexpr int16_t kWaveBarGap = 2;
+constexpr uint32_t kWaveFrameMs = 33;  // about 30 frames per second
 constexpr uint16_t kNowPlayingBarTrackColor = 0x39E7;  // dark grey
 constexpr size_t kFittedTextSize = kNowPlayingTextSize + 3;
 
@@ -677,7 +690,7 @@ void drawNowPlayingProgress(bool force) {
   const int16_t x = nowPlayingScreen.barX;
   const int16_t y = nowPlayingScreen.barY;
   const int16_t width = nowPlayingScreen.barWidth;
-  display.fillRect(x, y, fill, kNowPlayingBarHeight, kNowPlayingBarColor);
+  display.fillRect(x, y, fill, kNowPlayingBarHeight, nowPlayingScreen.color);
   display.fillRect(x + fill, y, width - fill, kNowPlayingBarHeight,
                    kNowPlayingBarTrackColor);
   display.setFont(kNowPlayingFont);
@@ -691,6 +704,53 @@ void drawNowPlayingProgress(bool force) {
   display.drawString(durationText, x + width, nowPlayingScreen.timesY);
   display.setTextDatum(top_left);
   display.setFont(&fonts::Font0);
+  display.endWrite();
+}
+
+// New random wave shape and color, once per song.
+void randomizeNowPlayingLook() {
+  uint32_t random[6];
+  for (uint32_t &value : random) value = esp_random();
+  nowPlayingScreen.wave = visualizer::randomWaveParams(random);
+  nowPlayingScreen.color =
+      visualizer::randomSongColor(esp_random(), esp_random());
+}
+
+// Draws one frame of the wave. Each bar is redrawn in place (bar, then the
+// black above and below it), so nothing is cleared and nothing flickers.
+void drawNowPlayingWave() {
+  nowPlayingScreen.waveDrawnAt = millis();
+  const int16_t barCount =
+      (nowPlayingScreen.waveWidth + kWaveBarGap) / (kWaveBarWidth + kWaveBarGap);
+  if (barCount <= 0) return;
+  const int16_t usedWidth =
+      barCount * (kWaveBarWidth + kWaveBarGap) - kWaveBarGap;
+  const int16_t startX =
+      nowPlayingScreen.waveX + (nowPlayingScreen.waveWidth - usedWidth) / 2;
+  const int16_t top = nowPlayingScreen.waveY;
+  const float seconds = nowPlayingScreen.waveDrawnAt / 1000.0f;
+
+  // Bars under the battery indicator are skipped while it is up.
+  const int16_t batteryLeft = batteryOverlayX() - 1;
+  const int16_t batteryBottom = kBatteryOverlayMargin + kBatteryOverlayHeight;
+  const bool batteryCovers = batteryOverlay.visible && top < batteryBottom;
+
+  display.setRotation(nowPlayingScreen.rotation);
+  display.startWrite();
+  for (int16_t i = 0; i < barCount; ++i) {
+    const int16_t x = startX + i * (kWaveBarWidth + kWaveBarGap);
+    if (batteryCovers && x + kWaveBarWidth > batteryLeft) continue;
+    const float position = barCount > 1 ? i / float(barCount - 1) : 0.5f;
+    const float level =
+        visualizer::waveLevel(nowPlayingScreen.wave, seconds, position);
+    int16_t height = static_cast<int16_t>(level * kWaveHeight);
+    height = constrain(height, 2, kWaveHeight);
+    const int16_t barTop = top + (kWaveHeight - height) / 2;
+    display.fillRect(x, top, kWaveBarWidth, barTop - top, TFT_BLACK);
+    display.fillRect(x, barTop, kWaveBarWidth, height, nowPlayingScreen.color);
+    display.fillRect(x, barTop + height, kWaveBarWidth,
+                     top + kWaveHeight - barTop - height, TFT_BLACK);
+  }
   display.endWrite();
 }
 
@@ -710,7 +770,8 @@ void drawNowPlayingScreen() {
   const int16_t smallLineHeight = display.fontHeight() + 2;
 
   constexpr int16_t kIconWidth = 13 * kNowPlayingScreenIconScale;
-  constexpr int16_t kIconHeight = 15 * kNowPlayingScreenIconScale;
+  constexpr int16_t kIconHeight =
+      kNowPlayingWave ? kWaveHeight : 15 * kNowPlayingScreenIconScale;
   constexpr int16_t kIconGap = 14;
   constexpr int16_t kArtistGap = 6;
   constexpr int16_t kProgressGap = 12;
@@ -740,8 +801,11 @@ void drawNowPlayingScreen() {
 
   display.startWrite();
   display.fillScreen(TFT_BLACK);
-  drawNoteIcon((width - kIconWidth) / 2, y, kNowPlayingScreenIconScale,
-               TFT_WHITE);
+  const int16_t iconY = y;
+  if (!kNowPlayingWave) {
+    drawNoteIcon((width - kIconWidth) / 2, y, kNowPlayingScreenIconScale,
+                 TFT_WHITE);
+  }
   y += kIconHeight + kIconGap;
   display.setTextDatum(top_center);
   display.setFont(kNowPlayingTitleFont);
@@ -758,6 +822,13 @@ void drawNowPlayingScreen() {
   display.setTextDatum(top_left);
   display.setFont(&fonts::Font0);
   display.endWrite();
+
+  if (kNowPlayingWave) {
+    nowPlayingScreen.waveX = kNowPlayingScreenPadding;
+    nowPlayingScreen.waveY = iconY;
+    nowPlayingScreen.waveWidth = textWidth;
+    drawNowPlayingWave();
+  }
 
   nowPlayingScreen.hasProgress = hasProgress;
   if (hasProgress) {
@@ -839,12 +910,23 @@ void pollNowPlaying() {
       drawOverlays();
     } else {
       drawNowPlayingProgress(false);
+      if (kNowPlayingWave &&
+          now - nowPlayingScreen.waveDrawnAt >= kWaveFrameMs) {
+        drawNowPlayingWave();
+      }
     }
   }
 
   if (nowPlayingOverlay.pending &&
       now - nowPlayingOverlay.changedAt >= kNowPlayingSettleMs) {
     nowPlayingOverlay.pending = false;
+    // A different song (not a resume of the same one) gets a new look.
+    if (strcmp(nowPlayingOverlay.shownTitle, nowPlayingOverlay.latest.title) !=
+            0 ||
+        strcmp(nowPlayingOverlay.shownArtist,
+               nowPlayingOverlay.latest.artist) != 0) {
+      randomizeNowPlayingLook();
+    }
     strcpy(nowPlayingOverlay.shownTitle, nowPlayingOverlay.latest.title);
     strcpy(nowPlayingOverlay.shownArtist, nowPlayingOverlay.latest.artist);
     if (kNowPlayingFullScreen) {
