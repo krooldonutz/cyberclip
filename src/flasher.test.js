@@ -15,93 +15,30 @@ function response(body, { ok = true, status = 200 } = {}) {
   };
 }
 
+function s3Manifest({ version = '2.0.15', size = 4 } = {}) {
+  return {
+    version,
+    builds: [{
+      chip: 'ESP32-S3',
+      board: 'LilyGO T-Display-S3',
+      path: `/firmware/cyberclip-lilygo-t-display-s3-${version}.bin`,
+      address: 0,
+      size,
+      flashMode: 'keep',
+      flashFreq: 'keep',
+    }],
+  };
+}
+
 describe('bundled firmware flashing', () => {
-  it('loads, validates, flashes, resets, and disconnects', async () => {
-    const firmware = [1, 2, 3, 4];
-    const fetchImpl = vi.fn()
-      .mockResolvedValueOnce(response({
-        version: '2.0.3',
-        path: '/firmware/cyberclip-2.0.3.bin',
-        address: 0,
-        size: firmware.length,
-      }))
-      .mockResolvedValueOnce(response(firmware));
-    const disconnect = vi.fn().mockResolvedValue();
-    class FakeTransport {
-      constructor(port) {
-        expect(port).toBe('serial-port');
-      }
-
-      disconnect = disconnect;
-    }
-    const writeFlash = vi.fn().mockImplementation(async ({ reportProgress }) => {
-      reportProgress(0, 4, 4);
-    });
-    const after = vi.fn().mockResolvedValue();
-    class FakeLoader {
-      chip = { CHIP_NAME: 'ESP32' };
-
-      main = vi.fn().mockResolvedValue('ESP32');
-
-      writeFlash = writeFlash;
-
-      after = after;
-    }
-    const onProgress = vi.fn();
-
-    const manifest = await flashBundledFirmware({
-      port: 'serial-port',
-      fetchImpl,
-      onProgress,
-      Loader: FakeLoader,
-      SerialTransport: FakeTransport,
-    });
-
-    expect(manifest.version).toBe('2.0.3');
-    expect(writeFlash).toHaveBeenCalledWith(expect.objectContaining({
-      fileArray: [{ data: Uint8Array.from(firmware), address: 0 }],
-      eraseAll: false,
-    }));
-    expect(onProgress).toHaveBeenLastCalledWith(100);
-    expect(after).toHaveBeenCalledWith(
-      'custom_reset',
-      false,
-      'D0|R1|W100|R0|W500',
-    );
-    expect(disconnect).toHaveBeenCalled();
-  });
-
-  it('selects the ESP32-S3 image for a LilyGO T-Display-S3', async () => {
+  it('flashes the T-Display-S3 image, resets, and disconnects', async () => {
     const firmware = [9, 8, 7];
     const fetchImpl = vi.fn()
-      .mockResolvedValueOnce(response({
-        version: '2.0.15',
-        path: '/firmware/cyberclip-2.0.15.bin',
-        address: 0,
-        size: 4,
-        builds: [
-          {
-            chip: 'ESP32',
-            board: 'ideaspark ESP32 ST7789',
-            path: '/firmware/cyberclip-2.0.15.bin',
-            address: 0,
-            size: 4,
-            flashMode: 'dio',
-            flashFreq: '40m',
-          },
-          {
-            chip: 'ESP32-S3',
-            board: 'LilyGO T-Display-S3',
-            path: '/firmware/cyberclip-lilygo-t-display-s3-2.0.15.bin',
-            address: 0,
-            size: firmware.length,
-            flashMode: 'keep',
-            flashFreq: 'keep',
-          },
-        ],
-      }))
+      .mockResolvedValueOnce(response(s3Manifest({ size: firmware.length })))
       .mockResolvedValueOnce(response(firmware));
-    const writeFlash = vi.fn().mockResolvedValue();
+    const writeFlash = vi.fn().mockImplementation(async ({ reportProgress }) => {
+      reportProgress(0, 3, 3);
+    });
     const after = vi.fn().mockRejectedValue(new Error('Invalid custom reset sequence'));
     const writeReg = vi.fn().mockResolvedValue();
     class FakeLoader {
@@ -115,13 +52,20 @@ describe('bundled firmware flashing', () => {
 
       after = after;
     }
+    const disconnect = vi.fn().mockResolvedValue();
     class FakeTransport {
-      disconnect = vi.fn().mockResolvedValue();
+      constructor(port) {
+        expect(port).toBe('serial-port');
+      }
+
+      disconnect = disconnect;
     }
+    const onProgress = vi.fn();
 
     const result = await flashBundledFirmware({
       port: 'serial-port',
       fetchImpl,
+      onProgress,
       Loader: FakeLoader,
       SerialTransport: FakeTransport,
     });
@@ -134,25 +78,43 @@ describe('bundled firmware flashing', () => {
       fileArray: [{ data: Uint8Array.from(firmware), address: 0 }],
       flashMode: 'keep',
       flashFreq: 'keep',
+      eraseAll: false,
     }));
+    expect(onProgress).toHaveBeenLastCalledWith(100);
     expect(writeReg).toHaveBeenCalledWith(0x6000812c, 0, 0x1);
     expect(writeReg.mock.invocationCallOrder[0])
       .toBeLessThan(after.mock.invocationCallOrder[0]);
     expect(after).toHaveBeenCalledWith('custom_reset', false, 'D0|R1|W200|R0|W500');
-    expect(result).toMatchObject({ chip: 'ESP32-S3', board: 'LilyGO T-Display-S3' });
+    expect(disconnect).toHaveBeenCalled();
+    expect(result).toMatchObject({
+      version: '2.0.15',
+      chip: 'ESP32-S3',
+      board: 'LilyGO T-Display-S3',
+    });
   });
 
-  it('rejects a chip without a matching firmware image', async () => {
+  it('rejects a manifest without a builds list', async () => {
     const fetchImpl = vi.fn().mockResolvedValueOnce(response({
       version: '2.0.3',
       path: '/firmware/cyberclip-2.0.3.bin',
       address: 0,
       size: 4,
     }));
-    class FakeLoader {
-      chip = { CHIP_NAME: 'ESP32-C3' };
 
-      main = vi.fn().mockResolvedValue('ESP32-C3');
+    await expect(flashBundledFirmware({
+      port: 'serial-port',
+      fetchImpl,
+      Loader: class {},
+      SerialTransport: class {},
+    })).rejects.toThrow('Bundled firmware metadata is invalid');
+  });
+
+  it('rejects a chip without a matching firmware image', async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(response(s3Manifest()));
+    class FakeLoader {
+      chip = { CHIP_NAME: 'ESP32' };
+
+      main = vi.fn().mockResolvedValue('ESP32');
     }
     class FakeTransport {
       disconnect = vi.fn().mockResolvedValue();
@@ -163,22 +125,17 @@ describe('bundled firmware flashing', () => {
       fetchImpl,
       Loader: FakeLoader,
       SerialTransport: FakeTransport,
-    })).rejects.toThrow('requires an ESP32; detected ESP32-C3');
+    })).rejects.toThrow('requires an ESP32-S3; detected ESP32');
   });
 
   it('rejects a firmware image whose size does not match its manifest', async () => {
     const fetchImpl = vi.fn()
-      .mockResolvedValueOnce(response({
-        version: '2.0.3',
-        path: '/firmware/cyberclip-2.0.3.bin',
-        address: 0,
-        size: 5,
-      }))
+      .mockResolvedValueOnce(response(s3Manifest({ size: 5 })))
       .mockResolvedValueOnce(response([1, 2, 3, 4]));
     class FakeLoader {
-      chip = { CHIP_NAME: 'ESP32' };
+      chip = { CHIP_NAME: 'ESP32-S3' };
 
-      main = vi.fn().mockResolvedValue('ESP32');
+      main = vi.fn().mockResolvedValue('ESP32-S3');
     }
     class FakeTransport {
       disconnect = vi.fn().mockResolvedValue();
@@ -200,12 +157,9 @@ describe('native USB download port', () => {
     close: vi.fn().mockResolvedValue(),
   });
 
-  it('uses bridge and USB-Serial/JTAG ports directly', async () => {
-    const bridge = port(0x1a86, 0x7523);
+  it('uses the USB-Serial/JTAG port directly', async () => {
     const jtag = port(0x303a, 0x1001);
-    expect(await resolveDownloadPort(bridge)).toBe(bridge);
     expect(await resolveDownloadPort(jtag)).toBe(jtag);
-    expect(bridge.open).not.toHaveBeenCalled();
     expect(jtag.open).not.toHaveBeenCalled();
   });
 

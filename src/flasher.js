@@ -2,12 +2,9 @@ import { ESPLoader, Transport } from 'esptool-js';
 
 export const FIRMWARE_MANIFEST_URL = '/firmware/manifest.json';
 
-// Reset sequences after flashing. Native USB-Serial/JTAG (ESP32-S3) needs a
-// longer reset pulse than a CH340-style USB-UART bridge.
-const RESET_SEQUENCES = {
-  ESP32: 'D0|R1|W100|R0|W500',
-  'ESP32-S3': 'D0|R1|W200|R0|W500',
-};
+// Reset sequence after flashing. The ESP32-S3's native USB-Serial/JTAG unit
+// needs a longer reset pulse than a USB-UART bridge would.
+const RESET_SEQUENCE = 'D0|R1|W200|R0|W500';
 
 export const ESPRESSIF_USB_VENDOR_ID = 0x303a;
 export const ESP32S3_RTC_CNTL_OPTION1_REG = 0x6000812c;
@@ -115,7 +112,7 @@ export async function flashBundledFirmware({
   SerialTransport = Transport,
   wait = sleep,
 }) {
-  if (!port) throw new Error('Choose an ESP32 serial device first');
+  if (!port) throw new Error('Choose a serial device first');
   if (!fetchImpl) throw new Error('Firmware download is unavailable');
 
   onStatus('Loading bundled firmware');
@@ -180,7 +177,7 @@ export async function flashBundledFirmware({
       );
     }
     try {
-      await loader.after('custom_reset', false, RESET_SEQUENCES[chipName] ?? RESET_SEQUENCES.ESP32);
+      await loader.after('custom_reset', false, RESET_SEQUENCE);
     } catch {
       // On native USB the port disappears as soon as the chip resets, so the
       // rest of the sequence fails; the firmware is already written.
@@ -216,16 +213,15 @@ function isValidImage(entry) {
     && entry.size > 0;
 }
 
-// Returns the flashable images listed in the manifest. Manifests without a
-// `builds` list describe a single ESP32 image in their top-level fields.
+// Returns the flashable images listed in the manifest's `builds`.
 export function firmwareBuilds(manifest) {
   if (!manifest || typeof manifest.version !== 'string') {
     throw new Error('Bundled firmware metadata is invalid');
   }
-  const builds = Array.isArray(manifest.builds)
-    ? manifest.builds
-    : [{ chip: 'ESP32', path: manifest.path, address: manifest.address, size: manifest.size }];
-  if (builds.length === 0) throw new Error('Bundled firmware metadata is invalid');
+  const builds = manifest.builds;
+  if (!Array.isArray(builds) || builds.length === 0) {
+    throw new Error('Bundled firmware metadata is invalid');
+  }
   return builds.map((build) => {
     const normalized = {
       chip: build?.chip,
@@ -233,8 +229,8 @@ export function firmwareBuilds(manifest) {
       path: build?.path,
       address: build?.address,
       size: build?.size,
-      flashMode: build?.flashMode ?? 'dio',
-      flashFreq: build?.flashFreq ?? '40m',
+      flashMode: build?.flashMode ?? 'keep',
+      flashFreq: build?.flashFreq ?? 'keep',
     };
     if (
       typeof normalized.chip !== 'string'

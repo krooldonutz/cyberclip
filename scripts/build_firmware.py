@@ -25,19 +25,10 @@ MANIFEST_PATH = REPOSITORY_ROOT / 'public' / 'firmware' / 'manifest.json'
 SERVICE_WORKER_PATH = REPOSITORY_ROOT / 'public' / 'service-worker.js'
 BUILD_ROOT = FIRMWARE_DIRECTORY / '.pio' / 'build'
 
-# The first target is also published through the legacy top-level manifest
-# fields so older web app builds keep flashing the original ESP32 board.
+# The manifest has no legacy top-level image fields: web app builds old
+# enough to need them only flashed the original ESP32 board, which is no longer
+# supported, so they reject the manifest instead of flashing the wrong chip.
 FIRMWARE_TARGETS = [
-    {
-        'environment': 'ideaspark_esp32',
-        'chip': 'ESP32',
-        'esptool_chip': 'esp32',
-        'board': 'ideaspark ESP32 ST7789',
-        'file_stem': 'cyberclip',
-        'bootloader_offset': 0x1000,
-        'flash_mode': 'dio',
-        'flash_freq': '40m',
-    },
     {
         'environment': 'lilygo_t_display_s3',
         'chip': 'ESP32-S3',
@@ -212,7 +203,7 @@ def build_release(version, rebuild=False):
             f'Version {version} must be newer than the current published '
             f'version {manifest["version"]}.')
 
-    old_web_paths = [manifest['path']]
+    old_web_paths = [manifest['path']] if 'path' in manifest else []
     old_web_paths += [build['path'] for build in manifest.get('builds', [])]
     old_web_paths = list(dict.fromkeys(old_web_paths))
     for old_web_path in old_web_paths:
@@ -300,12 +291,8 @@ def build_release(version, rebuild=False):
             assert_embedded_file(temporary_path, application_path, 0x10000)
             target['size'] = temporary_path.stat().st_size
 
-        legacy_target = targets[0]
         updated_manifest = json.dumps({
             'version': version,
-            'path': legacy_target['web_path'],
-            'address': 0,
-            'size': legacy_target['size'],
             'builds': [{
                 'chip': target['chip'],
                 'board': target['board'],

@@ -9,10 +9,11 @@
 #include <esp32-hal-cpu.h>
 
 #include "protocol.h"
+#include "visualizer.h"
+#include "src/ble_media.h"
 #include "src/wifi_manager.h"
 #include "src/ws_server.h"
 
-#if defined(CYBERCLIP_BOARD_LILYGO_T_DISPLAY_S3)
 namespace board {
 // LilyGO T-Display-S3: ESP32-S3 with a 1.9" ST7789 on an 8-bit i8080 bus.
 constexpr int kData[8] = {39, 40, 41, 42, 45, 46, 47, 48};
@@ -28,7 +29,6 @@ constexpr int kLcdPower = 15;
 constexpr int kBatteryAdc = 4;
 constexpr int kBatteryDivider = 2;
 constexpr int kBatteryButton = 14;
-#define CYBERCLIP_HAS_BATTERY 1
 constexpr uint16_t kWidth = 170;
 constexpr uint16_t kHeight = 320;
 
@@ -42,35 +42,10 @@ constexpr uint32_t kBusFrequency = 20000000;
 constexpr uint8_t kBacklightPwmChannel = 7;
 constexpr char kDeviceName[] = "CyberClip LilyGO T-Display-S3 ST7789";
 }  // namespace board
-#else
-namespace board {
-constexpr int kMosi = 23;
-constexpr int kSclk = 18;
-constexpr int kCs = 15;
-constexpr int kDc = 2;
-constexpr int kReset = 4;
-constexpr int kBacklight = 32;
-constexpr int kLcdPower = -1;
-constexpr uint16_t kWidth = 170;
-constexpr uint16_t kHeight = 320;
-
-// This 1.9" board exposes a centered 170x320 window in ST7789 RAM.
-constexpr uint16_t kControllerWidth = 240;
-constexpr uint16_t kControllerHeight = 320;
-constexpr uint16_t kOffsetX = 35;
-constexpr uint16_t kOffsetY = 0;
-constexpr bool kInvert = true;
-constexpr bool kRgbOrder = false;
-constexpr uint32_t kSpiFrequency = 80000000;
-constexpr uint8_t kBacklightPwmChannel = 7;
-constexpr char kDeviceName[] = "CyberClip Ideaspark ESP32 ST7789";
-}  // namespace board
-#endif
 
 class MatrixDisplay : public lgfx::LGFX_Device {
  public:
   MatrixDisplay() {
-#if defined(CYBERCLIP_BOARD_LILYGO_T_DISPLAY_S3)
     {
       auto cfg = bus_.config();
       cfg.freq_write = board::kBusFrequency;
@@ -88,24 +63,6 @@ class MatrixDisplay : public lgfx::LGFX_Device {
       bus_.config(cfg);
       panel_.setBus(&bus_);
     }
-#else
-    {
-      auto cfg = bus_.config();
-      cfg.spi_host = VSPI_HOST;
-      cfg.spi_mode = 0;
-      cfg.freq_write = board::kSpiFrequency;
-      cfg.freq_read = 16000000;
-      cfg.spi_3wire = true;
-      cfg.use_lock = true;
-      cfg.dma_channel = SPI_DMA_CH_AUTO;
-      cfg.pin_sclk = board::kSclk;
-      cfg.pin_mosi = board::kMosi;
-      cfg.pin_miso = -1;
-      cfg.pin_dc = board::kDc;
-      bus_.config(cfg);
-      panel_.setBus(&bus_);
-    }
-#endif
     {
       auto cfg = panel_.config();
       cfg.pin_cs = board::kCs;
@@ -138,11 +95,7 @@ class MatrixDisplay : public lgfx::LGFX_Device {
   }
 
  private:
-#if defined(CYBERCLIP_BOARD_LILYGO_T_DISPLAY_S3)
   lgfx::Bus_Parallel8 bus_;
-#else
-  lgfx::Bus_SPI bus_;
-#endif
   lgfx::Panel_ST7789 panel_;
   lgfx::Light_PWM light_;
 };
@@ -169,7 +122,7 @@ constexpr uint32_t kSleepButtonDebounceMs = 30;
 constexpr uint32_t kHotspotButtonHoldMs = 1500;
 constexpr uint8_t kFirmwareMajor = 2;
 constexpr uint8_t kFirmwareMinor = 0;
-constexpr uint8_t kFirmwarePatch = 23;
+constexpr uint8_t kFirmwarePatch = 24;
 using board::kDeviceName;
 constexpr char kMetadataPath[] = "/playlist.meta";
 constexpr char kMetadataTempPath[] = "/playlist.tmp";
@@ -244,6 +197,9 @@ struct Framebuffer {
   bool allocated = false;
   // Set when the buffer holds a decoded stored frame that is not yet shown.
   bool holdsPlaylistFrame = false;
+  // Set while the panel shows exactly the buffer's contents, so an overlay
+  // can be removed by pushing the buffer again.
+  bool presented = false;
   uint8_t generation = 0;
   uint16_t frameIndex = 0;
 } framebuffer;
@@ -271,6 +227,10 @@ bool startStoredPlayback();
 bool decodeJpegBuffer(uint8_t *data, uint32_t size, uint16_t width,
                       uint16_t height, uint8_t rotation, bool render);
 bool renderPlaylistFrame(const Playlist &playlist, uint16_t frameIndex);
+void presentFramebuffer();
+void drawOverlays();
+void restoreUnderOverlay(int16_t x, int16_t y, int16_t width, int16_t height,
+                         uint8_t rotation);
 
 // Tracks what is on screen so a temporary overlay can be removed afterwards.
 enum class ScreenContent : uint8_t { kFill, kPlaylistFrame, kLiveFrame, kProgress };
@@ -281,7 +241,33 @@ struct ScreenState {
   uint16_t playlistFrame = 0;
 } screen;
 
-#if defined(CYBERCLIP_HAS_BATTERY)
+// Full-screen now-playing view (kNowPlayingFullScreen). While it is up,
+// `screen` keeps describing the media underneath, which comes back when the
+// music stops, and stored playback is paused.
+struct {
+  bool visible = false;
+  uint8_t rotation = 0;
+  // Progress bar geometry from the last full draw, so the bar and times can
+  // be updated without redrawing the rest.
+  bool hasProgress = false;
+  int16_t barX = 0;
+  int16_t barY = 0;
+  int16_t barWidth = 0;
+  int16_t timesY = 0;
+  int32_t shownSecond = -1;
+  int16_t shownFill = -1;
+  // Wave area from the last full draw, and the per-song look.
+  int16_t waveX = 0;
+  int16_t waveY = 0;
+  int16_t waveWidth = 0;
+  uint32_t waveDrawnAt = 0;
+  visualizer::WaveParams wave;
+  uint16_t color = 0x05ff;
+} nowPlayingScreen;
+
+// Stored GIF playback that is actually advancing on the panel.
+bool playbackActive() { return playback.running && !nowPlayingScreen.visible; }
+
 constexpr uint32_t kBatteryOverlayMs = 3000;
 constexpr uint8_t kBatterySamples = 16;
 constexpr int16_t kBatteryOverlayMargin = 4;
@@ -380,31 +366,9 @@ void showBatteryOverlay() {
 void hideBatteryOverlay() {
   if (!batteryOverlay.visible) return;
   batteryOverlay.visible = false;
-  switch (screen.content) {
-    case ScreenContent::kPlaylistFrame:
-      if (activePlaylist.valid &&
-          activePlaylist.generation == screen.generation &&
-          renderPlaylistFrame(activePlaylist, screen.playlistFrame)) {
-        return;
-      }
-      break;
-    case ScreenContent::kLiveFrame:
-      if (liveFrame.data &&
-          decodeJpegBuffer(liveFrame.data, liveFrame.size, liveFrame.width,
-                           liveFrame.height, liveFrame.rotation, true)) {
-        return;
-      }
-      break;
-    case ScreenContent::kProgress:
-      return;
-    case ScreenContent::kFill:
-      break;
-  }
-  display.setRotation(batteryOverlay.rotation);
-  display.fillRect(batteryOverlayX(), kBatteryOverlayMargin,
-                   kBatteryOverlayWidth, kBatteryOverlayHeight,
-                   screen.content == ScreenContent::kFill ? screen.fillColor
-                                                          : TFT_BLACK);
+  restoreUnderOverlay(batteryOverlayX(), kBatteryOverlayMargin,
+                      kBatteryOverlayWidth, kBatteryOverlayHeight,
+                      batteryOverlay.rotation);
 }
 
 void pollBatteryButton() {
@@ -460,14 +424,14 @@ void noteActivity() {
 
 void updatePowerMode() {
   const uint32_t now = millis();
-  const bool animating = playback.running || transfer.active ||
+  const bool animating = playbackActive() || transfer.active ||
                          batteryOverlay.visible || batteryButton.pressed;
   // The ADC read takes well under a millisecond, so it runs only when the
   // next GIF frame is far enough away that it cannot delay it. A GIF that
   // never leaves that slack still gets a read every few intervals.
   const bool hasSlack =
       !transfer.active &&
-      loopIdleSleepMs(false, playback.running,
+      loopIdleSleepMs(false, playbackActive(),
                       static_cast<int32_t>(playback.deadline - now)) > 0;
   const uint32_t sinceCheck = now - power.checkedAt;
   if (!power.checked ||
@@ -493,20 +457,551 @@ void updatePowerMode() {
     wifiManager.resume();
   }
 }
-#else
-void noteActivity() {}
-void updatePowerMode() {}
-#endif
+
+// What the paired iPhone is playing (src/ble_media.cpp) can be shown in
+// three ways. Each is a hardcoded switch; they can be combined.
+//
+// Banner with the battery indicator while GPIO14 is pressed.
+constexpr bool kNowPlayingOnButton = true;
+// Replace the photo or GIF with a now-playing screen while music plays. The
+// media comes back (and a GIF resumes) when playback pauses or stops.
+constexpr bool kNowPlayingFullScreen = true;
+// Banner for a few seconds whenever a track starts or playback resumes.
+constexpr bool kNowPlayingAutoBanner = false;
+
+constexpr uint32_t kNowPlayingOverlayMs = 6000;
+// iOS sends the title and artist as separate notifications; waiting briefly
+// keeps the screen from showing the new title with the old artist.
+constexpr uint32_t kNowPlayingSettleMs = 300;
+constexpr int16_t kNowPlayingMargin = 4;
+constexpr int16_t kNowPlayingHeight = 34;
+constexpr int16_t kNowPlayingIconWidth = 18;
+constexpr uint16_t kNowPlayingArtistColor = 0xBDF7;  // light grey
+const lgfx::IFont *const kNowPlayingFont = &fonts::efontJA_12;
+const lgfx::IFont *const kNowPlayingTitleFont = &fonts::efontJA_16;
+constexpr uint8_t kNowPlayingScreenIconScale = 3;
+constexpr uint8_t kNowPlayingScreenTitleLines = 3;
+constexpr uint8_t kNowPlayingScreenArtistLines = 2;
+constexpr int16_t kNowPlayingScreenPadding = 10;
+constexpr int16_t kNowPlayingBarHeight = 4;
+// Animated sine/cosine wave instead of the note icon on the full screen.
+constexpr bool kNowPlayingWave = true;
+constexpr int16_t kWaveHeight = 40;
+constexpr int16_t kWaveBarWidth = 4;
+constexpr int16_t kWaveBarGap = 2;
+constexpr uint32_t kWaveFrameMs = 33;  // about 30 frames per second
+constexpr uint16_t kNowPlayingBarTrackColor = 0x39E7;  // dark grey
+constexpr size_t kFittedTextSize = kNowPlayingTextSize + 3;
+
+struct {
+  bool visible = false;
+  // Shown by the GPIO14 button, so it hides together with the battery
+  // indicator rather than on its own timer.
+  bool onButton = false;
+  bool pending = false;
+  uint32_t seenRevision = 0;
+  uint32_t changedAt = 0;
+  uint32_t shownAt = 0;
+  uint8_t rotation = 0;
+  NowPlaying latest;
+  // What was last announced, so unrelated updates do not re-show it.
+  char shownTitle[kNowPlayingTextSize] = {};
+  char shownArtist[kNowPlayingTextSize] = {};
+  bool wasPlaying = false;
+  bool buttonWasPressed = false;
+} nowPlayingOverlay;
+
+bool nowPlayingIsPlaying(const NowPlaying &info) {
+  return info.connected && info.playback == ams::PLAYBACK_PLAYING &&
+         info.title[0] != '\0';
+}
+
+int16_t nowPlayingOverlayY() {
+  return display.height() - kNowPlayingHeight - kNowPlayingMargin;
+}
+
+int16_t nowPlayingOverlayWidth() {
+  return display.width() - kNowPlayingMargin * 2;
+}
+
+// Copies *text* into *out*, ending it with "..." if it is wider than
+// *maxWidth* in the current font. Cuts only between UTF-8 characters.
+void fitText(const char *text, size_t length, int16_t maxWidth, char *out) {
+  length = ams::utf8Boundary(text, length, kNowPlayingTextSize - 1);
+  memcpy(out, text, length);
+  out[length] = '\0';
+  if (display.textWidth(out) <= maxWidth) return;
+  const int16_t ellipsisWidth = display.textWidth("...");
+  while (length > 0) {
+    length = ams::utf8Boundary(text, length, length - 1);
+    out[length] = '\0';
+    if (display.textWidth(out) + ellipsisWidth <= maxWidth) break;
+  }
+  memcpy(out + length, "...", 4);
+}
+
+void drawFittedText(const char *text, int16_t x, int16_t y, int16_t maxWidth) {
+  char fitted[kFittedTextSize];
+  fitText(text, strlen(text), maxWidth, fitted);
+  display.drawString(fitted, x, y);
+}
+
+// Splits *text* into at most *maxLines* lines no wider than *maxWidth*,
+// breaking at spaces where possible; the last line ends with "..." if text
+// is left over. Returns the number of lines.
+uint8_t wrapText(const char *text, int16_t maxWidth, uint8_t maxLines,
+                 char lines[][kFittedTextSize]) {
+  const size_t length = strlen(text);
+  size_t position = 0;
+  uint8_t count = 0;
+  char candidate[kFittedTextSize];
+  while (position < length && count < maxLines) {
+    while (position < length && text[position] == ' ') ++position;
+    if (position >= length) break;
+    const char *rest = text + position;
+    const size_t restLength = length - position;
+    if (count + 1 == maxLines) {
+      fitText(rest, restLength, maxWidth, lines[count++]);
+      break;
+    }
+    // Longest prefix that fits, and the last space within it.
+    size_t fits = 0;
+    size_t lastSpace = 0;
+    for (size_t next = ams::utf8Next(rest, restLength, 0);;
+         next = ams::utf8Next(rest, restLength, next)) {
+      if (next >= kFittedTextSize) break;
+      memcpy(candidate, rest, next);
+      candidate[next] = '\0';
+      if (display.textWidth(candidate) > maxWidth) break;
+      fits = next;
+      if (next < restLength && rest[next] == ' ') lastSpace = next;
+      if (next >= restLength) break;
+    }
+    if (fits == 0) fits = ams::utf8Next(rest, restLength, 0);
+    const size_t take =
+        (fits < restLength && lastSpace > 0) ? lastSpace : fits;
+    memcpy(lines[count], rest, take);
+    lines[count++][take] = '\0';
+    position += take;
+  }
+  return count;
+}
+
+// A beamed pair of eighth notes, (12 * scale + scale) x (15 * scale).
+void drawNoteIcon(int16_t x, int16_t y, uint8_t scale, uint16_t color) {
+  const int16_t s = scale;
+  display.fillCircle(x + 2 * s, y + 13 * s, 2 * s, color);
+  display.fillCircle(x + 10 * s, y + 11 * s, 2 * s, color);
+  display.fillRect(x + 4 * s, y + 2 * s, s, 11 * s, color);
+  display.fillRect(x + 12 * s, y, s, 11 * s, color);
+  display.fillTriangle(x + 4 * s, y + 2 * s, x + 13 * s, y, x + 13 * s,
+                       y + 2 * s, color);
+  display.fillTriangle(x + 4 * s, y + 2 * s, x + 13 * s, y + 2 * s, x + 4 * s,
+                       y + 4 * s, color);
+}
+
+void drawNowPlayingOverlay() {
+  nowPlayingOverlay.rotation = display.getRotation();
+  const NowPlaying &info = nowPlayingOverlay.latest;
+  const char *title = info.title;
+  const char *artist = info.artist;
+  if (!info.connected) {
+    title = "iPhone not connected";
+    artist = "Pair in Settings > Bluetooth";
+  } else if (title[0] == '\0') {
+    title = "Nothing playing";
+    artist = "";
+  }
+  const int16_t x = kNowPlayingMargin;
+  const int16_t y = nowPlayingOverlayY();
+  const int16_t width = nowPlayingOverlayWidth();
+
+  display.startWrite();
+  display.fillRoundRect(x, y, width, kNowPlayingHeight, 4, TFT_BLACK);
+  display.drawRoundRect(x, y, width, kNowPlayingHeight, 4, TFT_DARKGREY);
+  drawNoteIcon(x + 4, y + (kNowPlayingHeight - 15) / 2, 1, TFT_WHITE);
+
+  const int16_t textX = x + 4 + kNowPlayingIconWidth;
+  const int16_t textWidth = width - (textX - x) - 4;
+  display.setFont(kNowPlayingFont);
+  display.setTextSize(1);
+  display.setTextDatum(top_left);
+  display.setTextColor(TFT_WHITE, TFT_BLACK);
+  drawFittedText(title, textX, y + 4, textWidth);
+  display.setTextColor(kNowPlayingArtistColor, TFT_BLACK);
+  drawFittedText(artist, textX, y + 18, textWidth);
+  display.setFont(&fonts::Font0);
+  display.endWrite();
+}
+
+void showNowPlayingOverlay(bool onButton) {
+  if (screen.content == ScreenContent::kProgress) return;
+  nowPlayingOverlay.visible = true;
+  nowPlayingOverlay.onButton = onButton;
+  nowPlayingOverlay.shownAt = millis();
+  // The full-screen view already shows the same information.
+  if (!nowPlayingScreen.visible) drawNowPlayingOverlay();
+}
+
+void hideNowPlayingOverlay() {
+  nowPlayingOverlay.onButton = false;
+  if (!nowPlayingOverlay.visible) return;
+  nowPlayingOverlay.visible = false;
+  if (nowPlayingScreen.visible) return;
+  display.setRotation(nowPlayingOverlay.rotation);
+  restoreUnderOverlay(kNowPlayingMargin, nowPlayingOverlayY(),
+                      nowPlayingOverlayWidth(), kNowPlayingHeight,
+                      nowPlayingOverlay.rotation);
+}
+
+float nowPlayingElapsed(const NowPlaying &info) {
+  const bool advancing = info.playback == ams::PLAYBACK_PLAYING ||
+                         info.playback == ams::PLAYBACK_REWINDING ||
+                         info.playback == ams::PLAYBACK_FAST_FORWARDING;
+  ams::PlaybackInfo position = info.position;
+  if (!advancing) position.rate = 0;
+  return ams::extrapolateElapsed(position, millis() - info.positionAtMs,
+                                 info.durationSeconds);
+}
+
+// Redraws the bar and times when the second or the filled width changed.
+void drawNowPlayingProgress(bool force) {
+  const NowPlaying &info = nowPlayingOverlay.latest;
+  if (!nowPlayingScreen.hasProgress || info.durationSeconds <= 0) return;
+  const float elapsed = nowPlayingElapsed(info);
+  const int32_t second = static_cast<int32_t>(elapsed);
+  const int16_t fill = static_cast<int16_t>(
+      nowPlayingScreen.barWidth * (elapsed / info.durationSeconds));
+  if (!force && second == nowPlayingScreen.shownSecond &&
+      fill == nowPlayingScreen.shownFill) {
+    return;
+  }
+  nowPlayingScreen.shownSecond = second;
+  nowPlayingScreen.shownFill = fill;
+
+  char elapsedText[12];
+  char durationText[12];
+  ams::formatTrackTime(elapsed, elapsedText, sizeof(elapsedText));
+  ams::formatTrackTime(info.durationSeconds, durationText,
+                       sizeof(durationText));
+
+  display.setRotation(nowPlayingScreen.rotation);
+  display.startWrite();
+  const int16_t x = nowPlayingScreen.barX;
+  const int16_t y = nowPlayingScreen.barY;
+  const int16_t width = nowPlayingScreen.barWidth;
+  display.fillRect(x, y, fill, kNowPlayingBarHeight, nowPlayingScreen.color);
+  display.fillRect(x + fill, y, width - fill, kNowPlayingBarHeight,
+                   kNowPlayingBarTrackColor);
+  display.setFont(kNowPlayingFont);
+  display.setTextSize(1);
+  display.fillRect(x, nowPlayingScreen.timesY, width, display.fontHeight(),
+                   TFT_BLACK);
+  display.setTextColor(kNowPlayingArtistColor, TFT_BLACK);
+  display.setTextDatum(top_left);
+  display.drawString(elapsedText, x, nowPlayingScreen.timesY);
+  display.setTextDatum(top_right);
+  display.drawString(durationText, x + width, nowPlayingScreen.timesY);
+  display.setTextDatum(top_left);
+  display.setFont(&fonts::Font0);
+  display.endWrite();
+}
+
+// New random wave shape and color, once per song.
+void randomizeNowPlayingLook() {
+  uint32_t random[6];
+  for (uint32_t &value : random) value = esp_random();
+  nowPlayingScreen.wave = visualizer::randomWaveParams(random);
+  nowPlayingScreen.color =
+      visualizer::randomSongColor(esp_random(), esp_random());
+}
+
+// Draws one frame of the wave. Each bar is redrawn in place (bar, then the
+// black above and below it), so nothing is cleared and nothing flickers.
+void drawNowPlayingWave() {
+  nowPlayingScreen.waveDrawnAt = millis();
+  const int16_t barCount =
+      (nowPlayingScreen.waveWidth + kWaveBarGap) / (kWaveBarWidth + kWaveBarGap);
+  if (barCount <= 0) return;
+  const int16_t usedWidth =
+      barCount * (kWaveBarWidth + kWaveBarGap) - kWaveBarGap;
+  const int16_t startX =
+      nowPlayingScreen.waveX + (nowPlayingScreen.waveWidth - usedWidth) / 2;
+  const int16_t top = nowPlayingScreen.waveY;
+  const float seconds = nowPlayingScreen.waveDrawnAt / 1000.0f;
+
+  // Bars under the battery indicator are skipped while it is up.
+  const int16_t batteryLeft = batteryOverlayX() - 1;
+  const int16_t batteryBottom = kBatteryOverlayMargin + kBatteryOverlayHeight;
+  const bool batteryCovers = batteryOverlay.visible && top < batteryBottom;
+
+  display.setRotation(nowPlayingScreen.rotation);
+  display.startWrite();
+  for (int16_t i = 0; i < barCount; ++i) {
+    const int16_t x = startX + i * (kWaveBarWidth + kWaveBarGap);
+    if (batteryCovers && x + kWaveBarWidth > batteryLeft) continue;
+    const float position = barCount > 1 ? i / float(barCount - 1) : 0.5f;
+    const float level =
+        visualizer::waveLevel(nowPlayingScreen.wave, seconds, position);
+    int16_t height = static_cast<int16_t>(level * kWaveHeight);
+    height = constrain(height, 2, kWaveHeight);
+    const int16_t barTop = top + (kWaveHeight - height) / 2;
+    display.fillRect(x, top, kWaveBarWidth, barTop - top, TFT_BLACK);
+    display.fillRect(x, barTop, kWaveBarWidth, height, nowPlayingScreen.color);
+    display.fillRect(x, barTop + height, kWaveBarWidth,
+                     top + kWaveHeight - barTop - height, TFT_BLACK);
+  }
+  display.endWrite();
+}
+
+void drawNowPlayingScreen() {
+  display.setRotation(nowPlayingScreen.rotation);
+  const NowPlaying &info = nowPlayingOverlay.latest;
+  const int16_t width = display.width();
+  const int16_t textWidth = width - kNowPlayingScreenPadding * 2;
+  char titleLines[kNowPlayingScreenTitleLines][kFittedTextSize];
+  char artistLines[kNowPlayingScreenArtistLines][kFittedTextSize];
+  const bool hasProgress = info.durationSeconds > 0;
+
+  display.setTextSize(1);
+  display.setFont(kNowPlayingTitleFont);
+  const int16_t titleLineHeight = display.fontHeight() + 2;
+  display.setFont(kNowPlayingFont);
+  const int16_t smallLineHeight = display.fontHeight() + 2;
+
+  constexpr int16_t kIconWidth = 13 * kNowPlayingScreenIconScale;
+  constexpr int16_t kIconHeight =
+      kNowPlayingWave ? kWaveHeight : 15 * kNowPlayingScreenIconScale;
+  constexpr int16_t kIconGap = 14;
+  constexpr int16_t kArtistGap = 6;
+  constexpr int16_t kProgressGap = 12;
+  const int16_t progressHeight =
+      hasProgress ? kProgressGap + kNowPlayingBarHeight + 4 + smallLineHeight
+                  : 0;
+
+  // Fewer lines in landscape, where everything does not fit.
+  uint8_t titleCount = 0;
+  uint8_t artistCount = 0;
+  int16_t blockHeight = 0;
+  for (uint8_t titleMax = kNowPlayingScreenTitleLines; titleMax > 0;
+       --titleMax) {
+    const uint8_t artistMax =
+        titleMax == kNowPlayingScreenTitleLines ? kNowPlayingScreenArtistLines
+                                                : 1;
+    display.setFont(kNowPlayingTitleFont);
+    titleCount = wrapText(info.title, textWidth, titleMax, titleLines);
+    display.setFont(kNowPlayingFont);
+    artistCount = wrapText(info.artist, textWidth, artistMax, artistLines);
+    blockHeight = kIconHeight + kIconGap + titleCount * titleLineHeight +
+                  (artistCount ? kArtistGap : 0) +
+                  artistCount * smallLineHeight + progressHeight;
+    if (blockHeight <= display.height() - 8) break;
+  }
+  int16_t y = max<int16_t>(4, (display.height() - blockHeight) / 2);
+
+  display.startWrite();
+  display.fillScreen(TFT_BLACK);
+  const int16_t iconY = y;
+  if (!kNowPlayingWave) {
+    drawNoteIcon((width - kIconWidth) / 2, y, kNowPlayingScreenIconScale,
+                 TFT_WHITE);
+  }
+  y += kIconHeight + kIconGap;
+  display.setTextDatum(top_center);
+  display.setFont(kNowPlayingTitleFont);
+  display.setTextColor(TFT_WHITE, TFT_BLACK);
+  for (uint8_t i = 0; i < titleCount; ++i, y += titleLineHeight) {
+    display.drawString(titleLines[i], width / 2, y);
+  }
+  if (artistCount) y += kArtistGap;
+  display.setFont(kNowPlayingFont);
+  display.setTextColor(kNowPlayingArtistColor, TFT_BLACK);
+  for (uint8_t i = 0; i < artistCount; ++i, y += smallLineHeight) {
+    display.drawString(artistLines[i], width / 2, y);
+  }
+  display.setTextDatum(top_left);
+  display.setFont(&fonts::Font0);
+  display.endWrite();
+
+  if (kNowPlayingWave) {
+    nowPlayingScreen.waveX = kNowPlayingScreenPadding;
+    nowPlayingScreen.waveY = iconY;
+    nowPlayingScreen.waveWidth = textWidth;
+    drawNowPlayingWave();
+  }
+
+  nowPlayingScreen.hasProgress = hasProgress;
+  if (hasProgress) {
+    nowPlayingScreen.barX = kNowPlayingScreenPadding;
+    nowPlayingScreen.barY = y + kProgressGap;
+    nowPlayingScreen.barWidth = textWidth;
+    nowPlayingScreen.timesY = nowPlayingScreen.barY + kNowPlayingBarHeight + 4;
+    drawNowPlayingProgress(true);
+  }
+}
+
+void showNowPlayingScreen() {
+  // Uploads keep their progress screen.
+  if (screen.content == ScreenContent::kProgress || transfer.active) return;
+  if (!nowPlayingScreen.visible) {
+    nowPlayingScreen.rotation = display.getRotation();
+    nowPlayingScreen.visible = true;
+  }
+  drawNowPlayingScreen();
+  drawOverlays();
+}
+
+void hideNowPlayingScreen() {
+  if (!nowPlayingScreen.visible) return;
+  nowPlayingScreen.visible = false;
+  display.setRotation(nowPlayingScreen.rotation);
+  restoreUnderOverlay(0, 0, display.width(), display.height(),
+                      nowPlayingScreen.rotation);
+}
+
+// Runs after pollBatteryOverlay(), so the button banner appears and hides
+// together with the battery indicator.
+void pollNowPlayingButton() {
+  const bool pressed = batteryButton.pressed;
+  if (pressed && !nowPlayingOverlay.buttonWasPressed &&
+      batteryOverlay.visible) {
+    nowPlayingOverlay.latest = bleMedia.snapshot();
+    showNowPlayingOverlay(true);
+  } else if (nowPlayingOverlay.onButton && !batteryOverlay.visible) {
+    hideNowPlayingOverlay();
+  }
+  nowPlayingOverlay.buttonWasPressed = pressed;
+}
+
+void pollNowPlaying() {
+  if (kNowPlayingOnButton) pollNowPlayingButton();
+  const uint32_t now = millis();
+  const uint32_t revision = bleMedia.revision();
+  if (revision != nowPlayingOverlay.seenRevision) {
+    nowPlayingOverlay.seenRevision = revision;
+    nowPlayingOverlay.latest = bleMedia.snapshot();
+    const NowPlaying &info = nowPlayingOverlay.latest;
+    const bool playing = nowPlayingIsPlaying(info);
+    if (!playing) {
+      nowPlayingOverlay.pending = false;
+      if (kNowPlayingAutoBanner && !nowPlayingOverlay.onButton) {
+        hideNowPlayingOverlay();
+      }
+      if (kNowPlayingFullScreen) hideNowPlayingScreen();
+    } else if (!nowPlayingOverlay.wasPlaying ||
+               strcmp(info.title, nowPlayingOverlay.shownTitle) != 0 ||
+               strcmp(info.artist, nowPlayingOverlay.shownArtist) != 0) {
+      nowPlayingOverlay.pending = true;
+      nowPlayingOverlay.changedAt = now;
+    }
+    nowPlayingOverlay.wasPlaying = playing;
+    // A button banner follows whatever the iPhone reports while it is up.
+    if (nowPlayingOverlay.visible && nowPlayingOverlay.onButton &&
+        !nowPlayingScreen.visible) {
+      drawNowPlayingOverlay();
+    }
+  }
+
+  if (nowPlayingScreen.visible && !nowPlayingOverlay.pending) {
+    // The track length can arrive after the title and artist.
+    if ((nowPlayingOverlay.latest.durationSeconds > 0) !=
+        nowPlayingScreen.hasProgress) {
+      drawNowPlayingScreen();
+      drawOverlays();
+    } else {
+      drawNowPlayingProgress(false);
+      if (kNowPlayingWave &&
+          now - nowPlayingScreen.waveDrawnAt >= kWaveFrameMs) {
+        drawNowPlayingWave();
+      }
+    }
+  }
+
+  if (nowPlayingOverlay.pending &&
+      now - nowPlayingOverlay.changedAt >= kNowPlayingSettleMs) {
+    nowPlayingOverlay.pending = false;
+    // A different song (not a resume of the same one) gets a new look.
+    if (strcmp(nowPlayingOverlay.shownTitle, nowPlayingOverlay.latest.title) !=
+            0 ||
+        strcmp(nowPlayingOverlay.shownArtist,
+               nowPlayingOverlay.latest.artist) != 0) {
+      randomizeNowPlayingLook();
+    }
+    strcpy(nowPlayingOverlay.shownTitle, nowPlayingOverlay.latest.title);
+    strcpy(nowPlayingOverlay.shownArtist, nowPlayingOverlay.latest.artist);
+    if (kNowPlayingFullScreen) {
+      showNowPlayingScreen();
+    } else if (kNowPlayingAutoBanner && !nowPlayingOverlay.onButton) {
+      showNowPlayingOverlay(false);
+    }
+  } else if (kNowPlayingAutoBanner && nowPlayingOverlay.visible &&
+             !nowPlayingOverlay.onButton &&
+             now - nowPlayingOverlay.shownAt >= kNowPlayingOverlayMs) {
+    hideNowPlayingOverlay();
+  }
+}
+
+void drawOverlays() {
+  if (batteryOverlay.visible) drawBatteryOverlay();
+  if (nowPlayingOverlay.visible && !nowPlayingScreen.visible) {
+    drawNowPlayingOverlay();
+  }
+}
+
+// Redraws the screen after an overlay in *rotation* covering x/y/width/height
+// was hidden, then draws the overlays that are still visible.
+void restoreUnderOverlay(int16_t x, int16_t y, int16_t width, int16_t height,
+                         uint8_t rotation) {
+  if (nowPlayingScreen.visible) {
+    drawNowPlayingScreen();
+    drawOverlays();
+    return;
+  }
+  switch (screen.content) {
+    case ScreenContent::kPlaylistFrame:
+    case ScreenContent::kLiveFrame:
+      if (framebuffer.allocated && framebuffer.presented) {
+        presentFramebuffer();
+        drawOverlays();
+        return;
+      }
+      // Both re-render through markScreen*(), which redraws the overlays.
+      if (screen.content == ScreenContent::kPlaylistFrame &&
+          activePlaylist.valid &&
+          activePlaylist.generation == screen.generation &&
+          renderPlaylistFrame(activePlaylist, screen.playlistFrame)) {
+        return;
+      }
+      if (screen.content == ScreenContent::kLiveFrame && liveFrame.data &&
+          decodeJpegBuffer(liveFrame.data, liveFrame.size, liveFrame.width,
+                           liveFrame.height, liveFrame.rotation, true)) {
+        drawOverlays();
+        return;
+      }
+      break;
+    case ScreenContent::kProgress:
+      return;
+    case ScreenContent::kFill:
+      break;
+  }
+  display.setRotation(rotation);
+  display.fillRect(x, y, width, height,
+                   screen.content == ScreenContent::kFill ? screen.fillColor
+                                                          : TFT_BLACK);
+  drawOverlays();
+}
 
 void onScreenChanged() {
-#if defined(CYBERCLIP_HAS_BATTERY)
+  // New media, a message, or upload progress replaced the now-playing screen.
+  nowPlayingScreen.visible = false;
   if (screen.content != ScreenContent::kLiveFrame) releaseLiveFrame();
   if (screen.content == ScreenContent::kProgress) {
     batteryOverlay.visible = false;
-  } else if (batteryOverlay.visible) {
-    drawBatteryOverlay();
+    nowPlayingOverlay.visible = false;
+    nowPlayingOverlay.onButton = false;
+  } else {
+    drawOverlays();
   }
-#endif
 }
 
 void markScreenFill(uint16_t color) {
@@ -526,7 +1021,6 @@ void markScreenPlaylistFrame(uint8_t generation, uint16_t frameIndex) {
 // Called right after a live transfer was rendered; may take ownership of its
 // JPEG buffer so the frame can be redrawn later.
 void markScreenLiveFrame() {
-#if defined(CYBERCLIP_HAS_BATTERY)
   releaseLiveFrame();
   liveFrame.data = transfer.data;
   liveFrame.size = transfer.total;
@@ -534,7 +1028,6 @@ void markScreenLiveFrame() {
   liveFrame.height = transfer.height;
   liveFrame.rotation = transfer.rotation;
   transfer.data = nullptr;
-#endif
   screen = ScreenState{};
   screen.content = ScreenContent::kLiveFrame;
   onScreenChanged();
@@ -616,19 +1109,16 @@ void enterDeepSleep() {
   pinMode(board::kBacklight, OUTPUT);
   digitalWrite(board::kBacklight, LOW);
   gpio_hold_en(static_cast<gpio_num_t>(board::kBacklight));
-  if (board::kLcdPower >= 0) {
+  {
     const gpio_num_t lcdPower = static_cast<gpio_num_t>(board::kLcdPower);
     gpio_hold_dis(lcdPower);
     pinMode(board::kLcdPower, OUTPUT);
     digitalWrite(board::kLcdPower, LOW);
     gpio_hold_en(lcdPower);
   }
-#if CONFIG_IDF_TARGET_ESP32S3
   // Digital (non-RTC) pad holds only persist into deep sleep when enabled.
   gpio_deep_sleep_hold_en();
-#endif
 
-#if defined(CYBERCLIP_BOARD_LILYGO_T_DISPLAY_S3)
   // In deep sleep the button pads are RTC-muxed, where the digital pull-ups
   // no longer apply. Enable the RTC pull-ups on every button and keep
   // RTC_PERIPH powered so they (and the pads) are not isolated; otherwise a
@@ -644,9 +1134,6 @@ void enterDeepSleep() {
   }
   delay(5);
   esp_sleep_enable_ext1_wakeup(wakeMask, ESP_EXT1_WAKEUP_ANY_LOW);
-#else
-  esp_sleep_enable_ext0_wakeup(kSleepButton, LOW);
-#endif
   esp_deep_sleep_start();
 }
 
@@ -884,6 +1371,7 @@ bool decodeJpeg(uint8_t *data, uint32_t size, uint16_t width, uint16_t height,
     jpeg.setPixelType(RGB565_BIG_ENDIAN);
     if (output == JpegOutput::kFramebuffer) {
       framebuffer.holdsPlaylistFrame = false;
+      framebuffer.presented = false;
       framebuffer.rotation = rotation;
       framebuffer.width = width;
       framebuffer.height = height;
@@ -910,6 +1398,7 @@ void presentFramebuffer() {
   // Later drawing (overlays, text) uses the frame's own orientation.
   display.setRotation(framebuffer.rotation);
   framebuffer.holdsPlaylistFrame = false;
+  framebuffer.presented = true;
 }
 
 bool decodeJpegBuffer(uint8_t *data, uint32_t size, uint16_t width,
@@ -1126,7 +1615,9 @@ bool startStoredPlayback() {
 }
 
 void advanceStoredPlayback() {
-  if (!playback.running) return;
+  // Paused under the now-playing screen. Afterwards the loop below skips
+  // ahead to the frame that is due, as after any other late wake-up.
+  if (!playbackActive()) return;
   if (static_cast<int32_t>(millis() - playback.deadline) < 0) {
     preparePlaylistFrame(activePlaylist, playback.nextFrame);
     return;
@@ -1759,19 +2250,13 @@ void setup() {
     rtc_gpio_deinit(button);
     pinMode(button, INPUT_PULLUP);
   }
-#if CONFIG_IDF_TARGET_ESP32S3
   gpio_deep_sleep_hold_dis();
-#endif
-#if defined(CYBERCLIP_HAS_BATTERY)
   pinMode(board::kBatteryButton, INPUT_PULLUP);
   analogSetPinAttenuation(board::kBatteryAdc, ADC_11db);
-#endif
   gpio_hold_dis(static_cast<gpio_num_t>(board::kBacklight));
-  if (board::kLcdPower >= 0) {
-    gpio_hold_dis(static_cast<gpio_num_t>(board::kLcdPower));
-    pinMode(board::kLcdPower, OUTPUT);
-    digitalWrite(board::kLcdPower, HIGH);
-  }
+  gpio_hold_dis(static_cast<gpio_num_t>(board::kLcdPower));
+  pinMode(board::kLcdPower, OUTPUT);
+  digitalWrite(board::kLcdPower, HIGH);
   display.init();
   display.setBrightness(backlight);
   display.setRotation(0);
@@ -1784,6 +2269,7 @@ void setup() {
   if (filesystemMounted && loadActiveMetadata()) startStoredPlayback();
 
   wifiManager.begin();
+  bleMedia.begin();
 }
 
 void loop() {
@@ -1813,16 +2299,15 @@ void loop() {
   wsServerPoll();
   advanceStoredPlayback();
   pollButtons();
-#if defined(CYBERCLIP_HAS_BATTERY)
   pollBatteryButton();
   pollBatteryOverlay();
-#endif
+  pollNowPlaying();
   updatePowerMode();
 
   // Sleeping lets the idle task halt the CPU between passes instead of
   // spinning. Drawing has already finished, so this never splits a frame.
   const uint32_t sleepMs = loopIdleSleepMs(
-      busy || transfer.active, playback.running,
+      busy || transfer.active, playbackActive(),
       static_cast<int32_t>(playback.deadline - millis()));
   if (sleepMs > 0) delay(sleepMs);
   else yield();

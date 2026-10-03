@@ -1,7 +1,7 @@
 {
   "name": "Cyberclip Display",
   "short_name": "Cyberclip",
-  "description": "Send images and GIFs directly to an ideaspark ESP32 ST7789 display.",
+  "description": "Send images and GIFs directly to a LilyGO T-Display-S3.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0b1020",

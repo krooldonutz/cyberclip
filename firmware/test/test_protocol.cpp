@@ -1,6 +1,8 @@
 #include <unity.h>
 
+#include "../ams.h"
 #include "../protocol.h"
+#include "../visualizer.h"
 
 using namespace cyberclip;
 
@@ -125,6 +127,133 @@ void test_battery_percent_and_level() {
   TEST_ASSERT_EQUAL_UINT8(BATTERY_HIGH, batteryLevelFromPercent(100));
 }
 
+void test_ams_entity_update_parsing() {
+  const uint8_t notification[] = {ams::ENTITY_TRACK, ams::TRACK_TITLE, 0x01,
+                                  'S', 'o', 'n', 'g'};
+  ams::EntityUpdate update;
+  TEST_ASSERT_TRUE(
+      ams::parseEntityUpdate(notification, sizeof(notification), &update));
+  TEST_ASSERT_EQUAL_UINT8(ams::ENTITY_TRACK, update.entity);
+  TEST_ASSERT_EQUAL_UINT8(ams::TRACK_TITLE, update.attribute);
+  TEST_ASSERT_TRUE(update.truncated);
+  TEST_ASSERT_EQUAL_UINT32(4, update.valueLength);
+  TEST_ASSERT_EQUAL_MEMORY("Song", update.value, 4);
+
+  const uint8_t empty[] = {ams::ENTITY_TRACK, ams::TRACK_ARTIST, 0x00};
+  TEST_ASSERT_TRUE(ams::parseEntityUpdate(empty, sizeof(empty), &update));
+  TEST_ASSERT_FALSE(update.truncated);
+  TEST_ASSERT_EQUAL_UINT32(0, update.valueLength);
+  TEST_ASSERT_FALSE(ams::parseEntityUpdate(empty, 2, &update));
+}
+
+void test_ams_playback_state() {
+  TEST_ASSERT_EQUAL_UINT8(ams::PLAYBACK_PLAYING,
+                          ams::parsePlaybackState("1,1.0,12.5", 10));
+  TEST_ASSERT_EQUAL_UINT8(ams::PLAYBACK_PAUSED,
+                          ams::parsePlaybackState("0,0.0,3.1", 9));
+  TEST_ASSERT_EQUAL_UINT8(ams::PLAYBACK_PAUSED, ams::parsePlaybackState("0", 1));
+  TEST_ASSERT_EQUAL_UINT8(ams::PLAYBACK_UNKNOWN, ams::parsePlaybackState("", 0));
+  TEST_ASSERT_EQUAL_UINT8(ams::PLAYBACK_UNKNOWN,
+                          ams::parsePlaybackState("12,1.0", 6));
+  TEST_ASSERT_EQUAL_UINT8(ams::PLAYBACK_UNKNOWN,
+                          ams::parsePlaybackState("9,1.0", 5));
+}
+
+void test_ams_playback_info_and_time() {
+  ams::PlaybackInfo info;
+  TEST_ASSERT_TRUE(ams::parsePlaybackInfo("1,1.000,42.500", 14, &info));
+  TEST_ASSERT_EQUAL_UINT8(ams::PLAYBACK_PLAYING, info.state);
+  TEST_ASSERT_EQUAL_FLOAT(1.0f, info.rate);
+  TEST_ASSERT_EQUAL_FLOAT(42.5f, info.elapsedSeconds);
+  TEST_ASSERT_TRUE(ams::parsePlaybackInfo("2,-2.0,10", 9, &info));
+  TEST_ASSERT_EQUAL_FLOAT(-2.0f, info.rate);
+  TEST_ASSERT_FALSE(ams::parsePlaybackInfo("1,1.0", 5, &info));
+  TEST_ASSERT_FALSE(ams::parsePlaybackInfo("1,x,3", 5, &info));
+  TEST_ASSERT_FALSE(ams::parsePlaybackInfo("1", 1, &info));
+
+  float seconds = 0;
+  TEST_ASSERT_TRUE(ams::parseSeconds("245.123", 7, &seconds));
+  TEST_ASSERT_EQUAL_FLOAT(245.123f, seconds);
+  TEST_ASSERT_FALSE(ams::parseSeconds("", 0, &seconds));
+  TEST_ASSERT_FALSE(ams::parseSeconds("abc", 3, &seconds));
+  TEST_ASSERT_FALSE(ams::parseSeconds("-1", 2, &seconds));
+
+  ams::PlaybackInfo playing;
+  playing.rate = 1.0f;
+  playing.elapsedSeconds = 10.0f;
+  TEST_ASSERT_EQUAL_FLOAT(12.5f, ams::extrapolateElapsed(playing, 2500, 200));
+  TEST_ASSERT_EQUAL_FLOAT(200.0f, ams::extrapolateElapsed(playing, 999000, 200));
+  playing.rate = -2.0f;
+  TEST_ASSERT_EQUAL_FLOAT(0.0f, ams::extrapolateElapsed(playing, 9000, 200));
+
+  char text[12];
+  ams::formatTrackTime(65.9f, text, sizeof(text));
+  TEST_ASSERT_EQUAL_STRING("1:05", text);
+  ams::formatTrackTime(3725.0f, text, sizeof(text));
+  TEST_ASSERT_EQUAL_STRING("1:02:05", text);
+  ams::formatTrackTime(-3.0f, text, sizeof(text));
+  TEST_ASSERT_EQUAL_STRING("0:00", text);
+}
+
+void test_ams_utf8_storage() {
+  // "café" is 5 bytes; cutting at 4 would split the 2-byte "é".
+  const char cafe[] = "caf\xC3\xA9";
+  TEST_ASSERT_EQUAL_UINT32(5, ams::utf8Boundary(cafe, 5, 5));
+  TEST_ASSERT_EQUAL_UINT32(3, ams::utf8Boundary(cafe, 5, 4));
+  // A 3-byte character ("あ") cut after its first or second byte.
+  const char kana[] = "a\xE3\x81\x82";
+  TEST_ASSERT_EQUAL_UINT32(1, ams::utf8Boundary(kana, 4, 2));
+  TEST_ASSERT_EQUAL_UINT32(1, ams::utf8Boundary(kana, 4, 3));
+
+  TEST_ASSERT_EQUAL_UINT32(1, ams::utf8Next(kana, 4, 0));
+  TEST_ASSERT_EQUAL_UINT32(4, ams::utf8Next(kana, 4, 1));
+  TEST_ASSERT_EQUAL_UINT32(4, ams::utf8Next(kana, 4, 4));
+
+  char buffer[5] = "";
+  TEST_ASSERT_TRUE(ams::storeUtf8(buffer, sizeof(buffer), cafe, 5));
+  TEST_ASSERT_EQUAL_STRING("caf", buffer);
+  TEST_ASSERT_FALSE(ams::storeUtf8(buffer, sizeof(buffer), cafe, 5));
+  TEST_ASSERT_TRUE(ams::storeUtf8(buffer, sizeof(buffer), "", 0));
+  TEST_ASSERT_EQUAL_STRING("", buffer);
+  TEST_ASSERT_FALSE(ams::storeUtf8(buffer, sizeof(buffer), "", 0));
+}
+
+void test_visualizer_wave_and_color() {
+  using namespace visualizer;
+  WaveParams params;
+  params.speed1 = 3.0f;
+  params.speed2 = 5.0f;
+  params.cycles1 = 1.0f;
+  params.cycles2 = 2.0f;
+  params.phase1 = 0.0f;
+  params.phase2 = 0.0f;
+  // sin(0) = 0 and cos(0) = 1 at t = 0, position 0.
+  TEST_ASSERT_FLOAT_WITHIN(0.0001f, 0.70f, waveLevel(params, 0, 0));
+  for (int i = 0; i <= 100; ++i) {
+    const float level = waveLevel(params, i * 0.137f, i / 100.0f);
+    TEST_ASSERT_TRUE(level >= 0.1f - 0.0001f && level <= 1.0f + 0.0001f);
+  }
+
+  const uint32_t low[6] = {0, 0, 0, 0, 0, 0};
+  const WaveParams lowest = randomWaveParams(low);
+  TEST_ASSERT_EQUAL_FLOAT(2.0f, lowest.speed1);
+  TEST_ASSERT_EQUAL_FLOAT(0.5f, lowest.cycles1);
+  const uint32_t high[6] = {0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF,
+                            0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF};
+  const WaveParams highest = randomWaveParams(high);
+  TEST_ASSERT_TRUE(highest.speed1 <= 5.0f && highest.speed2 <= 7.0f);
+
+  TEST_ASSERT_EQUAL_HEX16(0xF800, hsvToRgb565(0, 1, 1));
+  TEST_ASSERT_EQUAL_HEX16(0x07E0, hsvToRgb565(120, 1, 1));
+  TEST_ASSERT_EQUAL_HEX16(0x001F, hsvToRgb565(240, 1, 1));
+  TEST_ASSERT_EQUAL_HEX16(0xFFFF, hsvToRgb565(77, 0, 1));
+  TEST_ASSERT_EQUAL_HEX16(0xF800, hsvToRgb565(360, 1, 1));
+  // Saturation is capped, so a song color is never pure white or black.
+  const uint16_t color = randomSongColor(0x80000000, 0);
+  TEST_ASSERT_NOT_EQUAL(0xFFFF, color);
+  TEST_ASSERT_NOT_EQUAL(0x0000, color);
+}
+
 void runTests() {
   UNITY_BEGIN();
   RUN_TEST(test_battery_percent_and_level);
@@ -135,6 +264,11 @@ void runTests() {
   RUN_TEST(test_wifi_command_bytes_do_not_collide);
   RUN_TEST(test_hotspot_validation_and_fallback_policy);
   RUN_TEST(test_power_policy);
+  RUN_TEST(test_ams_entity_update_parsing);
+  RUN_TEST(test_ams_playback_state);
+  RUN_TEST(test_ams_playback_info_and_time);
+  RUN_TEST(test_ams_utf8_storage);
+  RUN_TEST(test_visualizer_wave_and_color);
   UNITY_END();
 }
 

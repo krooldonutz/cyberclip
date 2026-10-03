@@ -6,7 +6,6 @@
 // hosts such as the browser serial-port picker show the product name instead.
 #include <sdkconfig.h>
 
-#if defined(CYBERCLIP_BOARD_LILYGO_T_DISPLAY_S3)
 #if ARDUINO_USB_MODE || !CONFIG_TINYUSB_ENABLED
 #error "The T-Display-S3 build requires TinyUSB (ARDUINO_USB_MODE=0)."
 #endif
@@ -76,4 +75,3 @@ extern "C" uint16_t const *tud_descriptor_string_cb(uint8_t index,
                                         (2 * length + 2));
   return descriptor;
 }
-#endif

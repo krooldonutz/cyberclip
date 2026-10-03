@@ -1,7 +1,7 @@
 {
   "name": "cyberclip",
   "version": "2.0.0",
-  "description": "VIA-style Web Serial controller for the ideaspark ESP32 ST7789 display",
+  "description": "VIA-style Web Serial controller for the LilyGO T-Display-S3",
   "type": "module",
   "scripts": {
     "dev": "vite",
