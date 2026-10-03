@@ -1,24 +1,24 @@
 {
-  "version": "2.0.21",
-  "path": "/firmware/cyberclip-2.0.21.bin",
+  "version": "2.0.22",
+  "path": "/firmware/cyberclip-2.0.22.bin",
   "address": 0,
-  "size": 1089136,
+  "size": 1089712,
   "builds": [
     {
       "chip": "ESP32",
       "board": "ideaspark ESP32 ST7789",
-      "path": "/firmware/cyberclip-2.0.21.bin",
+      "path": "/firmware/cyberclip-2.0.22.bin",
       "address": 0,
-      "size": 1089136,
+      "size": 1089712,
       "flashMode": "dio",
       "flashFreq": "40m"
     },
     {
       "chip": "ESP32-S3",
       "board": "LilyGO T-Display-S3",
-      "path": "/firmware/cyberclip-lilygo-t-display-s3-2.0.21.bin",
+      "path": "/firmware/cyberclip-lilygo-t-display-s3-2.0.22.bin",
       "address": 0,
-      "size": 1043760,
+      "size": 1044368,
       "flashMode": "keep",
       "flashFreq": "keep"
     }
