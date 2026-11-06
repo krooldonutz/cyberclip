@@ -14,10 +14,18 @@ Once Cyberclip is running, the board appears as **Pixie Pixel Gear** in the
 browser's serial-port picker (it uses TinyUSB with its own USB product name).
 To update it, choose **Pixie Pixel Gear**: the installer reboots the board into
 download mode, where it briefly shows up as **USB JTAG/serial debug unit**. If
-the browser has not been allowed to use that device yet, you will be asked to
-select **Install firmware** again and choose it. After installation, select
-**Connect** and choose **Pixie Pixel Gear** if the app does not reconnect on
-its own.
+the browser has not been allowed to use that device yet, select **Continue
+installation** and choose it (the browser remembers it for later updates). The
+installer restarts the board itself when it finishes, so the BOOT and RST
+buttons are never needed. WiFi and hotspot settings are kept. If an install is
+stopped part-way, the board waits in download mode and the app says so; select
+**Install firmware** again to finish. After installation, select **Connect**
+and choose **Pixie Pixel Gear** if the app does not reconnect on its own.
+
+If the firmware crashes three times in a row right after starting, it starts in
+**safe mode** (no saved media or WiFi; USB still works) so it can be
+reinstalled. If safe mode crashes too, the board restarts into download mode
+for the installer.
 
 | ST7789 signal | ESP32-S3 pin |
 |---|---:|
@@ -133,7 +141,7 @@ argument must be newer than the version in `public/firmware/manifest.json`.
 
 The firmware dependencies are pinned in `firmware/platformio.ini`.
 
-The web installer reads `public/firmware/manifest.json`, checks that the connected chip is an ESP32-S3, and flashes the prebuilt image after validating its metadata. It writes the bootloader, partition table, and application image without erasing the LittleFS media partition.
+The web installer reads `public/firmware/manifest.json`, checks that the connected chip is an ESP32-S3, and flashes the prebuilt image after validating its metadata. It writes the bootloader, partition table, and application image without erasing the LittleFS media partition, and skips the NVS partition (read from the image's partition table) so WiFi credentials, hotspot settings and pairing tokens survive an update.
 
 ## Quick start
 
