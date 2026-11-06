@@ -21,6 +21,7 @@ const ids = [
   'backlight-output', 'gif-delay-input', 'loop-input', 'persist-input', 'retry-button',
   'activity-log', 'log-template', 'library-refresh-button', 'library-usage-label',
   'library-count', 'library-usage', 'library-empty', 'library-list', 'disconnect-button',
+  'activity-count', 'toast-region',
 ];
 const elements = Object.fromEntries(ids.map((id) => [id, document.getElementById(id)]));
 // Shows the Disconnect button, which turns off the board's hotspot (and so
@@ -406,7 +407,7 @@ function setState(nextState) {
   elements['stop-button'].disabled = !busy;
   elements['clear-button'].disabled = !ready;
   elements['remove-stored-button'].disabled = !ready || !capabilities.persistentStorage;
-  elements['retry-button'].disabled = busy || nextState === 'connecting' || nextState === 'handshaking';
+  elements['retry-button'].hidden = nextState !== 'disconnected';
   elements['disconnect-button'].disabled = !ready;
   const online = transport.connected && nextState !== 'disconnected';
   elements['connection-pill'].className = `pill ${online ? 'pill-online' : 'pill-offline'}`;
@@ -452,6 +453,30 @@ function log(message, level = 'info') {
   entry.querySelector('time').textContent = new Date().toLocaleTimeString();
   entry.querySelector('span').textContent = message;
   elements['activity-log'].prepend(entry);
+  elements['activity-count'].textContent = String(elements['activity-log'].childElementCount);
+  showToast(message, level);
+}
+
+const MAX_TOASTS = 3;
+
+// Shows a message briefly; the full history stays under Activity.
+function showToast(message, level) {
+  const toast = document.createElement('button');
+  toast.type = 'button';
+  toast.className = 'toast';
+  toast.dataset.level = level;
+  toast.textContent = message;
+  toast.title = 'Dismiss';
+  const dismiss = () => {
+    clearTimeout(timer);
+    toast.classList.add('toast-leaving');
+    setTimeout(() => toast.remove(), 200);
+  };
+  const timer = setTimeout(dismiss, level === 'error' ? 7000 : 3500);
+  toast.addEventListener('click', dismiss);
+  const region = elements['toast-region'];
+  region.append(toast);
+  while (region.childElementCount > MAX_TOASTS) region.firstElementChild.remove();
 }
 
 function updateRangeOutputs() {

@@ -1,0 +1,151 @@
+/* Desktop site only (index.html and install.html). The device-hosted upload
+   page uses styles.css alone, which is embedded in the firmware. */
+
+/* Sits right after the title on every page, whatever else the header holds,
+   so the switch does not move between pages. */
+.page-nav {
+  margin: 0 auto 0 32px;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 12px;
+  background: rgba(17, 24, 39, 0.88);
+}
+
+.page-nav a {
+  padding: 8px 14px;
+  border-radius: 8px;
+  color: #94a3b8;
+  font-size: 0.9rem;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.page-nav a:hover {
+  color: #e2e8f0;
+}
+
+.page-nav a[aria-current="page"] {
+  color: #082f49;
+  background: #67e8f9;
+}
+
+.page-nav a:focus-visible,
+.install-notice a:focus-visible {
+  outline: 2px solid #22d3ee;
+  outline-offset: 2px;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.install-notice a {
+  color: #fde68a;
+  font-weight: 750;
+}
+
+.inline-link {
+  color: #67e8f9;
+  font-weight: 750;
+}
+
+.firmware-panel {
+  max-width: 720px;
+}
+
+.version-picker {
+  margin: 20px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.version-picker legend {
+  padding: 0;
+  color: #cbd5e1;
+  font-size: 0.86rem;
+  font-weight: 750;
+}
+
+.version-picker .device-help {
+  margin-top: 4px;
+}
+
+.version-list {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.version-option {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  background: #0f172a;
+  cursor: pointer;
+}
+
+.version-option:has(input:checked) {
+  border-color: #67e8f9;
+  background: rgba(103, 232, 249, 0.08);
+}
+
+.version-option:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.version-option input {
+  margin: 0;
+  accent-color: #67e8f9;
+}
+
+.version-name {
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+.version-latest {
+  justify-self: start;
+  min-height: 22px;
+  padding: 2px 9px;
+  color: #bbf7d0;
+  background: #14532d;
+}
+
+.version-latest[hidden] {
+  display: none;
+}
+
+.version-size {
+  grid-column: 4;
+  color: #94a3b8;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.install-actions {
+  margin-top: 18px;
+}
+
+@media (max-width: 620px) {
+  .page-nav {
+    order: 1;
+    width: 100%;
+    margin: 0;
+  }
+
+  .page-nav a {
+    flex: 1;
+    text-align: center;
+  }
+}

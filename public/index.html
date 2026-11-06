@@ -18,6 +18,10 @@
         <p class="eyebrow">ESP32 display studio</p>
         <h1>Cyberclip</h1>
       </div>
+      <nav class="page-nav" aria-label="Pages">
+        <a href="/" aria-current="page">Upload media</a>
+        <a href="/install.html">Install firmware</a>
+      </nav>
       <div class="header-actions">
         <span id="connection-pill" class="pill pill-offline">Disconnected</span>
         <button id="install-button" class="button button-secondary" hidden>Install app</button>
@@ -33,21 +37,19 @@
           </div>
           <div class="button-row">
             <button id="connect-button" class="button button-primary">Connect via USB</button>
-            <button id="flash-button" class="button button-secondary">Install firmware</button>
             <button id="disconnect-button" class="button button-danger" disabled>Disconnect</button>
           </div>
         </div>
 
         <div id="support-message" class="notice notice-warning" hidden></div>
         <div id="install-notice" class="notice notice-warning install-notice" role="status" hidden>
-          <p id="install-notice-message"></p>
-          <div id="install-notice-actions" class="button-row" hidden>
-            <button id="continue-install-button" class="button button-primary">Continue installation</button>
-            <button id="cancel-install-button" class="button button-secondary">Cancel</button>
-          </div>
+          <p>
+            Your board is waiting in update mode.
+            <a href="/install.html">Open Install firmware</a> to finish installing; your WiFi settings are kept.
+          </p>
         </div>
         <p class="device-help">
-          Install the bundled Cyberclip firmware directly from Chrome or Edge. Keep the USB cable connected until the board restarts.
+          New board or an update? <a class="inline-link" href="/install.html">Install firmware</a> first, then connect here to send images and GIFs.
         </p>
         <div id="device-details" class="device-details" aria-live="polite">
           <div><span>Display</span><strong id="device-resolution">170 × 320</strong></div>

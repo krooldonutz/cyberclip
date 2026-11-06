@@ -3,8 +3,11 @@ import {
   DOWNLOAD_PORT_FILTER,
   DownloadPortNotAuthorizedError,
   InstallInterruptedError,
+  compareVersions,
+  firmwareVersions,
   flashBundledFirmware,
   flashSegments,
+  loadFirmwareVersions,
   resolveDownloadPort,
   restartIntoFirmware,
 } from './flasher.js';
@@ -158,6 +161,104 @@ describe('bundled firmware flashing', () => {
       Loader: FakeLoader,
       SerialTransport: FakeTransport,
     })).rejects.toThrow('size is invalid');
+  });
+});
+
+describe('firmware versions', () => {
+  const multiVersion = () => {
+    const latest = s3Manifest({ version: '2.0.29' });
+    return {
+      ...latest,
+      versions: [
+        s3Manifest({ version: '2.0.9' }),
+        latest,
+        s3Manifest({ version: '2.0.28', size: 3 }),
+      ],
+    };
+  };
+
+  it('lists every version newest first and marks the newest', () => {
+    const versions = firmwareVersions(multiVersion());
+    expect(versions.map(({ version, latest }) => [version, latest])).toEqual([
+      ['2.0.29', true],
+      ['2.0.28', false],
+      ['2.0.9', false],
+    ]);
+  });
+
+  it('offers only the top-level build for a manifest without a versions list', () => {
+    expect(firmwareVersions(s3Manifest()).map(({ version }) => version)).toEqual(['2.0.15']);
+  });
+
+  it('rejects duplicate or malformed versions', () => {
+    expect(() => firmwareVersions({ versions: [s3Manifest(), s3Manifest()] }))
+      .toThrow('Bundled firmware metadata is invalid');
+    expect(() => firmwareVersions({ versions: [s3Manifest({ version: 'latest' })] }))
+      .toThrow('Bundled firmware metadata is invalid');
+  });
+
+  it('compares versions numerically', () => {
+    expect(compareVersions('2.0.10', '2.0.9')).toBeGreaterThan(0);
+    expect(compareVersions('2.0.9', '2.0.9')).toBe(0);
+  });
+
+  it('installs the chosen older version', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(response(multiVersion()))
+      .mockResolvedValueOnce(response([1, 2, 3]));
+    const writeFlash = vi.fn().mockResolvedValue();
+    class FakeLoader {
+      chip = { CHIP_NAME: 'ESP32-S3' };
+
+      main = vi.fn().mockResolvedValue('ESP32-S3');
+
+      writeFlash = writeFlash;
+
+      writeReg = vi.fn().mockResolvedValue();
+
+      after = vi.fn().mockResolvedValue();
+    }
+    class FakeTransport {
+      disconnect = vi.fn().mockResolvedValue();
+    }
+
+    const result = await flashBundledFirmware({
+      port: 'serial-port',
+      version: '2.0.28',
+      fetchImpl,
+      Loader: FakeLoader,
+      SerialTransport: FakeTransport,
+    });
+
+    expect(fetchImpl).toHaveBeenLastCalledWith(
+      '/firmware/cyberclip-lilygo-t-display-s3-2.0.28.bin',
+      expect.anything(),
+    );
+    expect(writeFlash).toHaveBeenCalledWith(expect.objectContaining({
+      fileArray: [{ data: Uint8Array.from([1, 2, 3]), address: 0 }],
+    }));
+    expect(result).toMatchObject({ version: '2.0.28', chip: 'ESP32-S3' });
+  });
+
+  it('refuses a version that is not published, before touching the board', async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(response(multiVersion()));
+    const open = vi.fn();
+    await expect(flashBundledFirmware({
+      port: { open, getInfo: () => ({}) },
+      version: '1.0.0',
+      fetchImpl,
+      Loader: class {},
+      SerialTransport: class {},
+    })).rejects.toThrow('Firmware 1.0.0 is not available');
+    expect(open).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('loads the version list from the manifest', async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(response(multiVersion()));
+    const versions = await loadFirmwareVersions({ fetchImpl });
+    expect(fetchImpl).toHaveBeenCalledWith('/firmware/manifest.json', expect.anything());
+    expect(versions[0].version).toBe('2.0.29');
   });
 });
 

@@ -19,8 +19,8 @@ installation** and choose it (the browser remembers it for later updates). The
 installer restarts the board itself when it finishes, so the BOOT and RST
 buttons are never needed. WiFi and hotspot settings are kept. If an install is
 stopped part-way, the board waits in download mode and the app says so; select
-**Install firmware** again to finish. After installation, select **Connect**
-and choose **Pixie Pixel Gear** if the app does not reconnect on its own.
+**Install firmware** again on the install page to finish. After installation,
+open **Upload media**, select **Connect** and choose **Pixie Pixel Gear**.
 
 If the firmware crashes three times in a row right after starting, it starts in
 **safe mode** (no saved media or WiFi; USB still works) so it can be
@@ -143,20 +143,21 @@ the pull request publishes the firmware. Pull it before pushing again.
 Python 3.8+ and npm are required. The script installs
 [PlatformIO Core](https://platformio.org/) with pip when needed, builds the
 firmware (`lilygo_t_display_s3`), merges the boot components into a single image,
-updates the firmware manifest and service-worker cache, and removes the
-previously published binaries. The version
+and adds the new version to the firmware manifest and service-worker cache.
+Earlier binaries stay in `public/firmware` and listed under `versions` in the
+manifest, so the installer can still put any of them on a board. The version
 argument must be newer than the version in `public/firmware/manifest.json`.
 
 The firmware dependencies are pinned in `firmware/platformio.ini`.
 
-The web installer reads `public/firmware/manifest.json`, checks that the connected chip is an ESP32-S3, and flashes the prebuilt image after validating its metadata. It writes the bootloader, partition table, and application image without erasing the LittleFS media partition, and skips the NVS partition (read from the image's partition table) so WiFi credentials, hotspot settings and pairing tokens survive an update.
+The web installer has its own page (`/install.html`, **Install firmware** in the site's header). It reads `public/firmware/manifest.json`, lists every published version newest first with the newest marked **Latest**, checks that the connected chip is an ESP32-S3, and flashes the chosen prebuilt image after validating its metadata. It writes the bootloader, partition table, and application image without erasing the LittleFS media partition, and skips the NVS partition (read from the image's partition table) so WiFi credentials, hotspot settings and pairing tokens survive an update.
 
 ## Quick start
 
 1. Connect the board using a data-capable USB cable.
 2. Open the Cyberclip web app in desktop Chrome or Edge.
-3. Select **Install firmware**, choose **Pixie Pixel Gear** (or **USB JTAG/serial debug unit** on a board without Cyberclip yet), and keep it connected until the board restarts.
-4. Select **Connect** and approve access if the browser prompts again.
+3. Open **Install firmware** in the header, pick a version (the newest is selected), select **Install firmware**, choose **Pixie Pixel Gear** (or **USB JTAG/serial debug unit** on a board without Cyberclip yet), and keep it connected until the board restarts.
+4. Go back to **Upload media**, select **Connect** and approve access if the browser prompts again.
 5. Wait for Cyberclip to verify the firmware and display capabilities.
 6. Choose an image or GIF, adjust its fit/rotation/quality, then select **Display image** or **Play GIF**.
 
@@ -369,7 +370,10 @@ Reconnect the board, press **Connect**, and approve the port again if prompted. 
 
 ```text
 src/
-  app.js             Browser state and UI
+  app.js             Upload page (index.html): browser state and UI
+  installApp.js      Firmware install page (install.html) with the version picker
+  flasher.js         Firmware manifest, version list, and flashing over Web Serial
+  site.css           Desktop-site styles (header nav, version picker)
   serial.js          Web Serial lifecycle
   wifiTransport.js   WebSocket lifecycle (mirrors serial.js) for WiFi control
   protocol.js        Framing, CRC, commands, payload helpers
@@ -377,6 +381,7 @@ src/
   gifs.js            GIF validation, compositing, timing
 public/
   index.html
+  install.html
   manifest.json
   service-worker.js
 firmware/

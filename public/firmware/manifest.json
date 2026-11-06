@@ -10,5 +10,91 @@
       "flashMode": "keep",
       "flashFreq": "keep"
     }
+  ],
+  "versions": [
+    {
+      "version": "2.0.29",
+      "builds": [
+        {
+          "chip": "ESP32-S3",
+          "board": "LilyGO T-Display-S3",
+          "path": "/firmware/cyberclip-lilygo-t-display-s3-2.0.29.bin",
+          "address": 0,
+          "size": 1840128,
+          "flashMode": "keep",
+          "flashFreq": "keep"
+        }
+      ]
+    },
+    {
+      "version": "2.0.28",
+      "builds": [
+        {
+          "chip": "ESP32-S3",
+          "board": "LilyGO T-Display-S3",
+          "path": "/firmware/cyberclip-lilygo-t-display-s3-2.0.28.bin",
+          "address": 0,
+          "size": 1839840,
+          "flashMode": "keep",
+          "flashFreq": "keep"
+        }
+      ]
+    },
+    {
+      "version": "2.0.27",
+      "builds": [
+        {
+          "chip": "ESP32-S3",
+          "board": "LilyGO T-Display-S3",
+          "path": "/firmware/cyberclip-lilygo-t-display-s3-2.0.27.bin",
+          "address": 0,
+          "size": 1832928,
+          "flashMode": "keep",
+          "flashFreq": "keep"
+        }
+      ]
+    },
+    {
+      "version": "2.0.26",
+      "builds": [
+        {
+          "chip": "ESP32-S3",
+          "board": "LilyGO T-Display-S3",
+          "path": "/firmware/cyberclip-lilygo-t-display-s3-2.0.26.bin",
+          "address": 0,
+          "size": 1824032,
+          "flashMode": "keep",
+          "flashFreq": "keep"
+        }
+      ]
+    },
+    {
+      "version": "2.0.25",
+      "builds": [
+        {
+          "chip": "ESP32-S3",
+          "board": "LilyGO T-Display-S3",
+          "path": "/firmware/cyberclip-lilygo-t-display-s3-2.0.25.bin",
+          "address": 0,
+          "size": 1823904,
+          "flashMode": "keep",
+          "flashFreq": "keep"
+        }
+      ]
+    },
+    {
+      "version": "2.0.24",
+      "builds": [
+        {
+          "chip": "ESP32-S3",
+          "board": "LilyGO T-Display-S3",
+          "path": "/firmware/cyberclip-lilygo-t-display-s3-2.0.24.bin",
+          "address": 0,
+          "size": 2020192,
+          "flashMode": "keep",
+          "flashFreq": "keep"
+        }
+      ]
+    }
   ]
 }
