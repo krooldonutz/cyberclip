@@ -1,4 +1,4 @@
-const CACHE_NAME = 'cyberclip-v32';
+const CACHE_NAME = 'cyberclip-v33';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -7,7 +7,7 @@ const APP_SHELL = [
   '/icons/icon-192.png',
   '/icons/icon-512.png',
   '/firmware/manifest.json',
-  '/firmware/cyberclip-lilygo-t-display-s3-2.0.25.bin',
+  '/firmware/cyberclip-lilygo-t-display-s3-2.0.26.bin',
 ];
 
 self.addEventListener('install', (event) => {

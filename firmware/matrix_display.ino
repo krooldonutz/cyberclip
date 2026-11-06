@@ -123,7 +123,7 @@ constexpr uint32_t kSleepButtonDebounceMs = 30;
 constexpr uint32_t kHotspotButtonHoldMs = 1500;
 constexpr uint8_t kFirmwareMajor = 2;
 constexpr uint8_t kFirmwareMinor = 0;
-constexpr uint8_t kFirmwarePatch = 25;
+constexpr uint8_t kFirmwarePatch = 26;
 using board::kDeviceName;
 constexpr char kMetadataPath[] = "/playlist.meta";
 constexpr char kMetadataTempPath[] = "/playlist.tmp";
@@ -167,6 +167,10 @@ struct Playback {
   uint16_t nextFrame = 0;
   uint32_t deadline = 0;
   bool running = false;
+  // Late frames in a row at the reduced clock, and whether this GIF has
+  // fallen behind there and now plays at full speed.
+  uint8_t lateFrames = 0;
+  bool needsFullSpeed = false;
 } playback;
 
 struct UploadProgress {
@@ -414,6 +418,11 @@ void setFullSpeed(bool fullSpeed) {
   power.fullSpeed = fullSpeed;
 }
 
+// The panel shows *backlight* (the level the app set), halved on battery.
+void applyBacklight() {
+  display.setBrightness(backlightLevelFor(power.onBattery, backlight));
+}
+
 // Called before protocol bytes are handled, so any decode or draw they
 // trigger already runs at full speed and WiFi is back before a WiFi command
 // is handled. Also restarts the WiFi idle timer.
@@ -425,8 +434,9 @@ void noteActivity() {
 
 void updatePowerMode() {
   const uint32_t now = millis();
-  const bool animating = playbackActive() || transfer.active ||
-                         batteryOverlay.visible || batteryButton.pressed;
+  const bool needsFullSpeed =
+      transfer.active || batteryOverlay.visible || batteryButton.pressed ||
+      (playbackActive() && playback.needsFullSpeed);
   // The ADC read takes well under a millisecond, so it runs only when the
   // next GIF frame is far enough away that it cannot delay it. A GIF that
   // never leaves that slack still gets a read every few intervals.
@@ -440,14 +450,15 @@ void updatePowerMode() {
       sinceCheck >= kPowerCheckIntervalMs * 6) {
     const bool wasOnBattery = power.onBattery;
     power.onBattery = onBatteryPower(power.onBattery, readBatteryMillivolts());
-    // Plugging in or unplugging restarts the WiFi idle timer.
-    if (power.checked && power.onBattery != wasOnBattery) {
-      power.lastActivityAt = now;
+    if (power.onBattery != wasOnBattery) {
+      applyBacklight();
+      // Plugging in or unplugging restarts the WiFi idle timer.
+      if (power.checked) power.lastActivityAt = now;
     }
     power.checked = true;
     power.checkedAt = now;
   }
-  setFullSpeed(shouldRunAtFullSpeed(power.onBattery, animating,
+  setFullSpeed(shouldRunAtFullSpeed(power.onBattery, needsFullSpeed,
                                     now - power.lastActivityAt,
                                     kFullSpeedHoldMs));
 
@@ -1631,6 +1642,15 @@ void advanceStoredPlayback() {
   }
 
   uint32_t now = millis();
+  // A GIF that cannot keep its frame times at the reduced clock finishes
+  // this playback at full speed.
+  if (!power.fullSpeed) {
+    playback.lateFrames =
+        updateLateFrameStreak(playback.lateFrames, now - playback.deadline);
+    if (playback.lateFrames >= kLateFramesBeforeFullSpeed) {
+      playback.needsFullSpeed = true;
+    }
+  }
   uint16_t frame = playback.nextFrame;
   while (true) {
     const bool lastFrame = frame + 1 >= activePlaylist.frameCount;
@@ -1938,7 +1958,7 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
         sendNack(sequence, command, INVALID_PAYLOAD);
       } else {
         backlight = payload[0];
-        display.setBrightness(backlight);
+        applyBacklight();
         sendAck(sequence, command);
       }
       return;
@@ -2271,7 +2291,7 @@ void setup() {
   pinMode(board::kLcdPower, OUTPUT);
   digitalWrite(board::kLcdPower, HIGH);
   display.init();
-  display.setBrightness(backlight);
+  applyBacklight();
   display.setRotation(0);
   display.fillScreen(TFT_BLACK);
   // Before WiFi starts, while the heap is least fragmented.

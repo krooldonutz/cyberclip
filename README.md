@@ -50,12 +50,18 @@ preferences remain unchanged.
 The main loop sleeps for 1 ms between passes when it is idle, so the CPU halts
 instead of spinning. It never sleeps while data is arriving, while an upload
 is open, or when the next GIF frame is due within that millisecond. On the
-T-Display-S3, when it is running from the battery and the screen is static (no
-GIF playing, no transfer, no battery overlay, and no data for 3 seconds), the
-CPU also drops to 80 MHz. It returns to 160 MHz as soon as data arrives, before
-anything is decoded or drawn, so GIFs and incoming frames always render at
-full speed. While the CPU is at 80 MHz, the idle sleep between loop passes
-grows to 20 ms, so the board wakes far less often while the screen is static.
+T-Display-S3, when it is running from the battery and nothing needs full speed
+(no transfer, no battery overlay, and no data for 3 seconds), the CPU also
+drops to 80 MHz. Saved GIFs keep playing at 80 MHz. If a GIF falls behind there
+(three frames in a row drawn 8 ms or more late), the rest of that playback runs
+at 160 MHz. The CPU returns to 160 MHz as soon as data arrives, before anything
+is decoded or drawn, so incoming frames always render at full speed. While the
+CPU is at 80 MHz, the idle sleep between loop passes grows to 20 ms, but a
+playing GIF still wakes in time for each frame.
+
+On battery, the backlight runs at half the level set in the app (50% becomes
+25%). It returns to the full level when USB power is plugged in, and the app
+still shows and saves the level you set.
 
 On battery, the T-Display-S3 also turns WiFi (both the network connection and
 the hotspot) fully off after 2 minutes without a command from the app. These
