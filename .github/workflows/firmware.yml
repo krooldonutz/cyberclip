@@ -52,13 +52,19 @@ jobs:
         run: |
           git fetch --quiet "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
             "+refs/heads/$BASE_REF:refs/remotes/upstream/$BASE_REF"
+          inputs=(firmware ':!firmware/generated' public/device.html
+            src/deviceApp.js src/gifs.js src/images.js src/protocol.js
+            src/wifiTransport.js src/styles.css vite.device.config.js
+            package-lock.json scripts/build_firmware.py)
+          fork_point=$(git merge-base "upstream/$BASE_REF" HEAD)
           last_build=$(git log -1 --format=%H --grep='^Build firmware ' \
             "upstream/$BASE_REF..HEAD" -- public/firmware/manifest.json)
-          if [ -n "$last_build" ] && git diff --quiet "$last_build" HEAD -- \
-              firmware ':!firmware/generated' public/device.html \
-              src/deviceApp.js src/gifs.js src/images.js src/protocol.js \
-              src/wifiTransport.js src/styles.css vite.device.config.js \
-              package-lock.json scripts/build_firmware.py; then
+          if git diff --quiet "$fork_point" HEAD -- "${inputs[@]}"; then
+            # Only the workflow or other non-firmware files changed: the image
+            # would match main's, so it gets no new version.
+            echo "This pull request does not change the firmware."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          elif [ -n "$last_build" ] && git diff --quiet "$last_build" HEAD -- "${inputs[@]}"; then
             echo "Firmware is already built for this pull request."
             echo "build=false" >> "$GITHUB_OUTPUT"
           else
