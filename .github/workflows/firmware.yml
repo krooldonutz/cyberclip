@@ -76,7 +76,14 @@ jobs:
             # This pull request already claimed a version; rebuild it in place.
             echo "version=$head_version" >> "$GITHUB_OUTPUT"
             echo "flags=--rebuild" >> "$GITHUB_OUTPUT"
+          elif ! git ls-remote --exit-code --tags "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+              "refs/tags/v$base_version" > /dev/null; then
+            # Versions count releases, not merges: main's version has not been
+            # released yet, so this pull request ships under the same number.
+            echo "version=$base_version" >> "$GITHUB_OUTPUT"
+            echo "flags=--rebuild" >> "$GITHUB_OUTPUT"
           else
+            # main's version is on production; start the next one.
             IFS=. read -r major minor patch <<< "$newest"
             echo "version=$major.$minor.$((patch + 1))" >> "$GITHUB_OUTPUT"
             echo "flags=" >> "$GITHUB_OUTPUT"

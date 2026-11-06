@@ -7,7 +7,7 @@ description: Ship Cyberclip to production (https://cyberclip.vercel.app) by publ
 
 ## How environments work
 
-- **Staging** is main's Vercel preview. Merging a PR into main deploys it there. A PR that changes firmware gets a "Build firmware X.Y.Z" commit from CI (`.github/workflows/firmware.yml`) before it merges.
+- **Staging** is main's Vercel preview. Merging a PR into main deploys it there. A PR that changes firmware gets a "Build firmware X.Y.Z" commit from CI (`.github/workflows/firmware.yml`) before it merges. Versions count releases, not merges: until `vX.Y.Z` is released, every firmware PR rebuilds X.Y.Z, and the first one after the release takes X.Y.(Z+1).
 - **Production** is the `production` branch. Vercel deploys it to https://cyberclip.vercel.app. Nobody pushes to it by hand: publishing a GitHub release runs `.github/workflows/release.yml`, which force-pushes the tagged commit to `production`.
 - The release workflow rejects a release unless all of these hold:
   - the tag is `v<version>`, where `<version>` is `version` in `public/firmware/manifest.json` at the tagged commit,
