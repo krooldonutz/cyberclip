@@ -43,8 +43,18 @@ jobs:
             exit 1
           }
           manifest_version=$(git show "$TAG:public/firmware/manifest.json" | jq -r .version)
-          if [ "$TAG" != "v$manifest_version" ]; then
-            echo "::error::Tag $TAG does not match the firmware version $manifest_version at that commit. Tag the release v$manifest_version."
+          # A release that carries new firmware is tagged v<firmware version>.
+          # Web-only changes after it are tagged v<firmware version>-web.<n>,
+          # and only once that firmware is itself released, so production
+          # never runs firmware that has no release of its own.
+          web_tag="^v${manifest_version//./[.]}-web[.][0-9]+$"
+          if [[ "$TAG" =~ $web_tag ]]; then
+            git rev-parse --verify --quiet "refs/tags/v$manifest_version^{commit}" > /dev/null || {
+              echo "::error::Firmware $manifest_version at $TAG has not been released. Release it as v$manifest_version instead of $TAG."
+              exit 1
+            }
+          elif [ "$TAG" != "v$manifest_version" ]; then
+            echo "::error::Tag $TAG does not match the firmware version $manifest_version at that commit. Tag the release v$manifest_version, or v$manifest_version-web.<n> for web-only changes after v$manifest_version."
             exit 1
           fi
           if ! git merge-base --is-ancestor "$TAG" origin/main; then
