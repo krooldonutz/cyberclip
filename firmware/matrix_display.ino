@@ -8,6 +8,11 @@
 #include <esp_bt.h>
 #include <esp_sleep.h>
 #include <esp32-hal-cpu.h>
+#include <esp_attr.h>
+#include <esp_system.h>
+#include <soc/rtc_cntl_reg.h>
+
+#include "boot_guard.h"
 
 #include "protocol.h"
 #include "visualizer.h"
@@ -2275,7 +2280,42 @@ FrameParser serialParser;
 FrameParser wsParser;
 }  // namespace
 
+// Survives software and watchdog resets (see boot_guard.h).
+RTC_NOINIT_ATTR BootGuardState bootGuard;
+BootAction bootAction = BootAction::kNormal;
+bool bootMarkedStable = false;
+
+void showSafeModeMessage() {
+  display.setRotation(0);
+  display.fillScreen(TFT_BLACK);
+  display.setTextColor(TFT_WHITE, TFT_BLACK);
+  display.setTextDatum(middle_center);
+  display.setTextSize(2);
+  const int32_t x = display.width() / 2;
+  const int32_t y = display.height() / 2;
+  display.drawString("Safe mode", x, y - 24);
+  display.setTextSize(1);
+  display.drawString("Reinstall firmware", x, y + 4);
+  display.drawString("over USB", x, y + 18);
+  display.setTextDatum(top_left);
+  markScreenFill(TFT_BLACK);
+}
+
 void setup() {
+  // First, before anything that could be what keeps crashing.
+  {
+    const esp_reset_reason_t reason = esp_reset_reason();
+    const bool crashed = reason == ESP_RST_PANIC ||
+                         reason == ESP_RST_INT_WDT ||
+                         reason == ESP_RST_TASK_WDT;
+    bootAction = bootGuardOnBoot(bootGuard, crashed);
+    if (bootAction == BootAction::kDownloadMode) {
+      // Same as the installer's 1200-baud reboot: the ROM stays in download
+      // mode, where the web installer can flash the board.
+      REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
+      esp_restart();
+    }
+  }
   setCpuFrequencyMhz(kCpuFrequencyMhz);
   Serial.setRxBufferSize(8192);
   Serial.begin(kSerialBaud);
@@ -2296,6 +2336,16 @@ void setup() {
   display.fillScreen(TFT_BLACK);
   // Before WiFi starts, while the heap is least fragmented.
   allocateFramebuffer();
+
+  if (bootAction == BootAction::kSafeMode) {
+    // Saved media and WiFi are the likely crash causes; leave them off and
+    // keep USB up so the firmware can be reinstalled.
+    showSafeModeMessage();
+#if !CYBERCLIP_BLE_MEDIA
+    esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
+#endif
+    return;
+  }
 
   filesystemMounted = LittleFS.begin(false);
   if (!filesystemMounted) filesystemMounted = LittleFS.begin(true);
@@ -2321,6 +2371,16 @@ void loop() {
     serialParser.feed(static_cast<uint8_t>(Serial.read()));
   }
   serialParser.pollTimeout();
+
+  if (bootAction == BootAction::kSafeMode) {
+    // USB only; the installer's 1200-baud reboot works from here.
+    delay(10);
+    return;
+  }
+  if (!bootMarkedStable && millis() >= kBootStableMs) {
+    bootGuardMarkStable(bootGuard);
+    bootMarkedStable = true;
+  }
 
   currentReplyTarget = ReplyTarget::kWebSocket;
   uint8_t wsByte;

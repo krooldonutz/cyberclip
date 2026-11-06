@@ -1,6 +1,7 @@
 #include <unity.h>
 
 #include "../ams.h"
+#include "../boot_guard.h"
 #include "../protocol.h"
 #include "../visualizer.h"
 
@@ -277,8 +278,36 @@ void test_visualizer_wave_and_color() {
   TEST_ASSERT_NOT_EQUAL(0x0000, color);
 }
 
+void test_boot_guard_escalates_crash_loops() {
+  BootGuardState state = {0xDEADBEEF, 1234};  // garbage after power-on
+  TEST_ASSERT_TRUE(bootGuardOnBoot(state, true) == BootAction::kNormal);
+  TEST_ASSERT_EQUAL_UINT32(1, state.crashes);
+  TEST_ASSERT_TRUE(bootGuardOnBoot(state, true) == BootAction::kNormal);
+  TEST_ASSERT_TRUE(bootGuardOnBoot(state, true) == BootAction::kSafeMode);
+  TEST_ASSERT_TRUE(bootGuardOnBoot(state, true) == BootAction::kSafeMode);
+  TEST_ASSERT_TRUE(bootGuardOnBoot(state, true) == BootAction::kDownloadMode);
+  // The count starts over for the freshly installed firmware.
+  TEST_ASSERT_EQUAL_UINT32(0, state.crashes);
+  TEST_ASSERT_TRUE(bootGuardOnBoot(state, true) == BootAction::kNormal);
+}
+
+void test_boot_guard_clears_on_clean_boot_or_stable_run() {
+  BootGuardState state = {kBootGuardMagic, 0};
+  bootGuardOnBoot(state, true);
+  bootGuardOnBoot(state, true);
+  TEST_ASSERT_TRUE(bootGuardOnBoot(state, false) == BootAction::kNormal);
+  TEST_ASSERT_EQUAL_UINT32(0, state.crashes);
+
+  bootGuardOnBoot(state, true);
+  bootGuardOnBoot(state, true);
+  bootGuardMarkStable(state);
+  TEST_ASSERT_TRUE(bootGuardOnBoot(state, true) == BootAction::kNormal);
+}
+
 void runTests() {
   UNITY_BEGIN();
+  RUN_TEST(test_boot_guard_escalates_crash_loops);
+  RUN_TEST(test_boot_guard_clears_on_clean_boot_or_stable_run);
   RUN_TEST(test_battery_percent_and_level);
   RUN_TEST(test_crc_standard_vector);
   RUN_TEST(test_little_endian_helpers);

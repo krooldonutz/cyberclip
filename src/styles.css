@@ -312,6 +312,14 @@ input[type="text"] {
   background: #422006;
 }
 
+.install-notice p {
+  margin: 0;
+}
+
+.install-notice .button-row {
+  margin-top: 12px;
+}
+
 .settings-panel {
   display: flex;
   flex-direction: column;

@@ -2,6 +2,7 @@ import './styles.css';
 import {
   DOWNLOAD_PORT_FILTER,
   DownloadPortNotAuthorizedError,
+  InstallInterruptedError,
   ESPRESSIF_USB_VENDOR_ID,
   USB_JTAG_SERIAL_PRODUCT_ID,
   flashBundledFirmware,
@@ -53,6 +54,11 @@ const elements = Object.fromEntries([
   'disconnect-button',
   'flash-button',
   'support-message',
+  'install-notice',
+  'install-notice-message',
+  'install-notice-actions',
+  'continue-install-button',
+  'cancel-install-button',
   'device-resolution',
   'device-firmware',
   'device-transport',
@@ -139,6 +145,7 @@ function initialize() {
   updateSupportMessage();
   setProgress(0, 'Ready');
   bindEvents();
+  void checkForWaitingBoard();
 
   const lastHost = localStorage.getItem(WIFI_LAST_HOST_KEY);
   if (lastHost) elements['wifi-host-input'].value = lastHost;
@@ -162,7 +169,13 @@ function bindEvents() {
   elements['forget-wifi-button'].addEventListener('click', forgetWifi);
   elements['save-hotspot-button'].addEventListener('click', saveHotspot);
   elements['disconnect-button'].addEventListener('click', () => activeTransport.disconnect());
-  elements['flash-button'].addEventListener('click', installFirmware);
+  elements['flash-button'].addEventListener('click', () => installFirmware());
+  if (webSerialAvailable) {
+    // A board left in download mode (e.g. by an install that was stopped)
+    // shows up as the USB-Serial/JTAG unit; point the user at finishing it.
+    navigator.serial.addEventListener('connect', () => { void checkForWaitingBoard(); });
+    navigator.serial.addEventListener('disconnect', () => { void checkForWaitingBoard(); });
+  }
   elements['media-input'].addEventListener('change', handleMediaSelection);
   elements['display-button'].addEventListener('click', displayImage);
   elements['play-button'].addEventListener('click', playGif);
@@ -199,6 +212,71 @@ function bindEvents() {
 }
 
 let awaitingDownloadPort = false;
+let askingForDownloadPort = false;
+
+function showInstallNotice(message, { actions = false } = {}) {
+  elements['install-notice-message'].textContent = message;
+  elements['install-notice-actions'].hidden = !actions;
+  elements['install-notice'].hidden = false;
+}
+
+function hideInstallNotice() {
+  elements['install-notice'].hidden = true;
+  elements['install-notice-actions'].hidden = true;
+}
+
+// Shows a notice while a board sits in download mode outside an install, so
+// a stopped install can always be finished from here (no BOOT/RST needed).
+async function checkForWaitingBoard() {
+  if (!webSerialAvailable || state === 'flashing' || askingForDownloadPort) return;
+  const ports = await navigator.serial.getPorts().catch(() => []);
+  if (ports.some(isDownloadPort)) {
+    awaitingDownloadPort = true;
+    showInstallNotice(
+      'Your board is waiting in update mode. Select Install firmware to finish installing; your WiFi settings are kept.',
+    );
+  } else if (!awaitingDownloadPort) {
+    hideInstallNotice();
+  }
+}
+
+// The browser only opens the port picker right after a click, and the click
+// on Install firmware has been used up by the time the board restarts into
+// download mode. This asks for a fresh click instead of failing.
+function askForDownloadPort({ signal }) {
+  return new Promise((resolve, reject) => {
+    askingForDownloadPort = true;
+    const finish = () => {
+      askingForDownloadPort = false;
+      elements['continue-install-button'].onclick = null;
+      elements['cancel-install-button'].onclick = null;
+      hideInstallNotice();
+    };
+    showInstallNotice(
+      'The board restarted into update mode. Select Continue installation, then choose "USB JTAG/serial debug unit".',
+      { actions: true },
+    );
+    elements['continue-install-button'].onclick = async () => {
+      try {
+        const picked = await navigator.serial.requestPort({ filters: [DOWNLOAD_PORT_FILTER] });
+        if (isDownloadPort(picked)) {
+          finish();
+          resolve(picked);
+        }
+      } catch {
+        // Picker closed without a choice; keep waiting for another click.
+      }
+    };
+    elements['cancel-install-button'].onclick = () => {
+      finish();
+      reject(new DOMException('Installation cancelled', 'AbortError'));
+    };
+    signal.addEventListener('abort', () => {
+      if (askingForDownloadPort) finish();
+      resolve(null);
+    }, { once: true });
+  });
+}
 
 async function chooseFlashPort() {
   const authorized = await navigator.serial.getPorts();
@@ -209,21 +287,23 @@ async function chooseFlashPort() {
   );
 }
 
-async function installFirmware() {
+async function installFirmware({ port: chosenPort } = {}) {
   if (!globalThis.confirm(
-    'Install the bundled Cyberclip firmware? Keep the USB cable connected until installation finishes.',
+    'Install the bundled Cyberclip firmware? Your WiFi settings and saved media are kept. Keep the USB cable connected until installation finishes.',
   )) {
     return;
   }
 
-  let port = serialTransport.port;
+  let port = chosenPort ?? serialTransport.port;
   try {
     if (!port) port = await chooseFlashPort();
     if (activeTransport.connected) await activeTransport.disconnect();
+    hideInstallNotice();
     setState('flashing');
     setProgress(0, 'Preparing firmware');
     const manifest = await flashBundledFirmware({
       port,
+      requestDownloadPort: askForDownloadPort,
       onProgress(progress) {
         setProgress(progress, 'Installing firmware');
       },
@@ -239,13 +319,20 @@ async function installFirmware() {
     // The native USB port re-enumerates as a new "Pixie Pixel Gear" device.
     await reconnectNativeUsb();
   } catch (error) {
-    awaitingDownloadPort = error instanceof DownloadPortNotAuthorizedError;
+    const leftInDownloadMode = error instanceof DownloadPortNotAuthorizedError
+      || error instanceof InstallInterruptedError;
+    awaitingDownloadPort = leftInDownloadMode;
     const message = error.name === 'NotFoundError'
       ? 'No serial device was selected'
       : error.message;
     log(`Firmware installation failed: ${message}`, 'error');
     setProgress(0, 'Firmware installation failed');
     setState('disconnected');
+    if (leftInDownloadMode) {
+      showInstallNotice(
+        'The board is waiting in update mode. Select Install firmware to finish installing; your WiFi settings are kept.',
+      );
+    }
   }
 }
 
@@ -268,6 +355,7 @@ async function reconnectNativeUsb() {
   }
   log('Firmware installed. Select Connect and choose "Pixie Pixel Gear" to finish.');
   setState('disconnected');
+  void checkForWaitingBoard();
 }
 
 async function connectUsb() {
@@ -275,7 +363,9 @@ async function connectUsb() {
   let lastError;
   try {
     const authorizedPorts = await navigator.serial.getPorts();
-    for (const port of authorizedPorts) {
+    // A download-mode port cannot talk the Cyberclip protocol.
+    const appPorts = authorizedPorts.filter((port) => !isDownloadPort(port));
+    for (const port of appPorts) {
       try {
         await serialTransport.connect({ port });
         return;
@@ -283,8 +373,14 @@ async function connectUsb() {
         lastError = error;
       }
     }
-    if (authorizedPorts.length === 0) {
-      await serialTransport.connect();
+    if (appPorts.length === 0) {
+      const port = await navigator.serial.requestPort();
+      if (isDownloadPort(port)) {
+        log('The board is waiting in update mode; installing firmware finishes it.');
+        await installFirmware({ port });
+        return;
+      }
+      await serialTransport.connect({ port });
       return;
     }
     throw lastError;
@@ -292,6 +388,7 @@ async function connectUsb() {
     const reportedError = error.name === 'NotFoundError' ? lastError : error;
     if (reportedError) log(`Connection failed: ${reportedError.message}`, 'error');
     setState('disconnected');
+    void checkForWaitingBoard();
   }
 }
 
