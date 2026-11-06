@@ -1,5 +1,7 @@
 #include "ble_media.h"
 
+#if CYBERCLIP_BLE_MEDIA
+
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 #include <freertos/FreeRTOS.h>
@@ -220,3 +222,5 @@ void BleMedia::onEntityUpdate(const uint8_t *data, size_t length) {
 }
 
 }  // namespace cyberclip
+
+#endif  // CYBERCLIP_BLE_MEDIA

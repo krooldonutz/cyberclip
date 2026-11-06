@@ -109,6 +109,13 @@ void test_power_policy() {
   TEST_ASSERT_EQUAL_UINT32(0, loopIdleSleepMs(false, true, 1));
   TEST_ASSERT_EQUAL_UINT32(0, loopIdleSleepMs(false, true, -5));
   TEST_ASSERT_EQUAL_UINT32(1, loopIdleSleepMs(false, true, 2));
+
+  // Longer battery idle sleep, still capped by the next GIF frame.
+  TEST_ASSERT_EQUAL_UINT32(0, loopIdleSleepMs(true, false, 0, 20));
+  TEST_ASSERT_EQUAL_UINT32(20, loopIdleSleepMs(false, false, 0, 20));
+  TEST_ASSERT_EQUAL_UINT32(9, loopIdleSleepMs(false, true, 10, 20));
+  TEST_ASSERT_EQUAL_UINT32(20, loopIdleSleepMs(false, true, 500, 20));
+  TEST_ASSERT_EQUAL_UINT32(0, loopIdleSleepMs(false, true, 1, 20));
 }
 
 void test_battery_percent_and_level() {

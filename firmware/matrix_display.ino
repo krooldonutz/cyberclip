@@ -5,6 +5,7 @@
 #include <driver/gpio.h>
 #include <driver/rtc_io.h>
 #include <esp_heap_caps.h>
+#include <esp_bt.h>
 #include <esp_sleep.h>
 #include <esp32-hal-cpu.h>
 
@@ -122,7 +123,7 @@ constexpr uint32_t kSleepButtonDebounceMs = 30;
 constexpr uint32_t kHotspotButtonHoldMs = 1500;
 constexpr uint8_t kFirmwareMajor = 2;
 constexpr uint8_t kFirmwareMinor = 0;
-constexpr uint8_t kFirmwarePatch = 24;
+constexpr uint8_t kFirmwarePatch = 25;
 using board::kDeviceName;
 constexpr char kMetadataPath[] = "/playlist.meta";
 constexpr char kMetadataTempPath[] = "/playlist.tmp";
@@ -459,7 +460,8 @@ void updatePowerMode() {
 }
 
 // What the paired iPhone is playing (src/ble_media.cpp) can be shown in
-// three ways. Each is a hardcoded switch; they can be combined.
+// three ways. Each is a hardcoded switch; they can be combined. All of them
+// need the CYBERCLIP_BLE_MEDIA build flag (see platformio.ini).
 //
 // Banner with the battery indicator while GPIO14 is pressed.
 constexpr bool kNowPlayingOnButton = true;
@@ -859,6 +861,7 @@ void hideNowPlayingScreen() {
                       nowPlayingScreen.rotation);
 }
 
+#if CYBERCLIP_BLE_MEDIA
 // Runs after pollBatteryOverlay(), so the button banner appears and hides
 // together with the battery indicator.
 void pollNowPlayingButton() {
@@ -940,6 +943,10 @@ void pollNowPlaying() {
     hideNowPlayingOverlay();
   }
 }
+#else
+// Bluetooth is compiled out: nothing ever starts the now-playing view.
+void pollNowPlaying() {}
+#endif  // CYBERCLIP_BLE_MEDIA
 
 void drawOverlays() {
   if (batteryOverlay.visible) drawBatteryOverlay();
@@ -1675,13 +1682,19 @@ void sendHello(uint16_t sequence) {
 }
 
 void sendStatus(uint16_t sequence) {
-  // STATUS_RESPONSE remains: transferActive u8, backlight u8, transferId u16,
-  // received u32, expected u32, freeHeap u32 (little-endian).
-  uint8_t payload[16] = {static_cast<uint8_t>(transfer.active), backlight};
+  // STATUS_RESPONSE: transferActive u8, backlight u8, transferId u16,
+  // received u32, expected u32, freeHeap u32, then diagnostics read by
+  // scripts/device.py: batteryMillivolts u16, onBattery u8, cpuMhz u16,
+  // uptimeMs u32 (all little-endian). Readers ignore bytes they don't know.
+  uint8_t payload[25] = {static_cast<uint8_t>(transfer.active), backlight};
   writeLe16(payload + 2, transfer.active ? transfer.id : 0);
   writeLe32(payload + 4, transfer.received);
   writeLe32(payload + 8, transfer.total);
   writeLe32(payload + 12, ESP.getFreeHeap());
+  writeLe16(payload + 16, static_cast<uint16_t>(readBatteryMillivolts()));
+  payload[18] = power.onBattery ? 1 : 0;
+  writeLe16(payload + 19, static_cast<uint16_t>(getCpuFrequencyMhz()));
+  writeLe32(payload + 21, millis());
   writeFrame(STATUS_RESPONSE, sequence, payload, sizeof(payload));
 }
 
@@ -2269,7 +2282,12 @@ void setup() {
   if (filesystemMounted && loadActiveMetadata()) startStoredPlayback();
 
   wifiManager.begin();
+#if CYBERCLIP_BLE_MEDIA
   bleMedia.begin();
+#else
+  // Bluetooth is compiled out; hand the controller's reserved RAM back.
+  esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
+#endif
 }
 
 void loop() {
@@ -2306,9 +2324,12 @@ void loop() {
 
   // Sleeping lets the idle task halt the CPU between passes instead of
   // spinning. Drawing has already finished, so this never splits a frame.
+  // On battery with the clock reduced (static screen, nothing arriving), the
+  // loop wakes far less often; activity switches back to 1 ms passes.
   const uint32_t sleepMs = loopIdleSleepMs(
       busy || transfer.active, playbackActive(),
-      static_cast<int32_t>(playback.deadline - millis()));
+      static_cast<int32_t>(playback.deadline - millis()),
+      power.fullSpeed ? kLoopIdleSleepMs : kBatteryIdleSleepMs);
   if (sleepMs > 0) delay(sleepMs);
   else yield();
 }

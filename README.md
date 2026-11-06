@@ -2,7 +2,7 @@
 
 Cyberclip is a VIA-style web controller for the **LilyGO T-Display-S3 (ESP32-S3 with an integrated 1.9-inch 170×320 ST7789 TFT)**. It processes images and GIFs in the browser, compresses each display frame as JPEG, and sends it directly to the board over USB with the Web Serial API, or over your own local WiFi network.
 
-There is no application server, Python CLI, or cloud relay. Bluetooth is used only to show what an iPhone is playing (see [iPhone now playing](#iphone-now-playing-bluetooth)); media still travels over USB or WiFi. WiFi is optional and local-only: the board can join your existing network or host its own WPA2-protected hotspot and phone upload page. WiFi and hotspot settings are provisioned over USB (see [WiFi control](#wifi-control) below). Media processing runs in the connected browser using the same image, GIF, and protocol modules in the desktop and hosted builds. Firmware flashing remains USB-only. The ESP32 receives validated frames, decodes them, and draws them to its display. When **Keep media on device** is enabled, it also stores the image or GIF in flash and resumes it without a USB data connection.
+There is no application server, Python CLI, or cloud relay. Bluetooth is used only to show what an iPhone is playing, and is currently turned off to save battery (see [iPhone now playing](#iphone-now-playing-bluetooth)); media still travels over USB or WiFi. WiFi is optional and local-only: the board can join your existing network or host its own WPA2-protected hotspot and phone upload page. WiFi and hotspot settings are provisioned over USB (see [WiFi control](#wifi-control) below). Media processing runs in the connected browser using the same image, GIF, and protocol modules in the desktop and hosted builds. Firmware flashing remains USB-only. The ESP32 receives validated frames, decodes them, and draws them to its display. When **Keep media on device** is enabled, it also stores the image or GIF in flash and resumes it without a USB data connection.
 
 ## Supported hardware
 
@@ -54,7 +54,8 @@ T-Display-S3, when it is running from the battery and the screen is static (no
 GIF playing, no transfer, no battery overlay, and no data for 3 seconds), the
 CPU also drops to 80 MHz. It returns to 160 MHz as soon as data arrives, before
 anything is decoded or drawn, so GIFs and incoming frames always render at
-full speed.
+full speed. While the CPU is at 80 MHz, the idle sleep between loop passes
+grows to 20 ms, so the board wakes far less often while the screen is static.
 
 On battery, the T-Display-S3 also turns WiFi (both the network connection and
 the hotspot) fully off after 2 minutes without a command from the app. These
@@ -155,6 +156,30 @@ npm run preview
 
 The deployable static site is written to `dist/`. Deploy it at the origin root on an HTTPS host. The service worker caches same-origin application assets after first use so the installed app can launch offline; serial data and selected media are never cached.
 
+### Running the tests
+
+The web app tests run with Vitest:
+
+```powershell
+npm test
+```
+
+The firmware's pure helpers (protocol, power policy, AMS parsing, visualizer) run on the PC through PlatformIO's `native` environment, which needs a host C++ compiler (`g++`) on `PATH`. On Windows, install one once with:
+
+```powershell
+winget install --id BrechtSanders.WinLibs.POSIX.UCRT -e
+```
+
+Open a new terminal afterwards so `PATH` picks it up, then run:
+
+```powershell
+cd firmware
+pio test -e native
+pio run -e lilygo_t_display_s3
+```
+
+The second command only checks that the board firmware compiles; it does not flash anything.
+
 ## Media behavior
 
 - Input formats: JPEG, PNG, WebP, and GIF
@@ -227,6 +252,8 @@ When the hotspot is running, join the displayed `Cyberclip-......` network from 
 The hotspot's WPA2 password is the access boundary for its self-hosted page. A WebSocket is accepted without the LAN pairing token only when the firmware observes that it arrived through the AP interface. Home-network WebSockets still require the random token issued during USB pairing. The password is stored on the device and is never returned to either web UI.
 
 ## iPhone now playing (Bluetooth)
+
+> **Currently disabled to save battery.** Bluetooth is never started, so the board does not show up in the iPhone's Bluetooth settings and the now-playing view and banner are not shown. The Bluetooth code is left out of the firmware at build time, so there is no setting on the device or in the app to turn it on. To bring it back, set `-DCYBERCLIP_BLE_MEDIA=1` in `firmware/platformio.ini` and flash the new firmware. The rest of this section describes the feature when it is enabled.
 
 The board can show the title and artist of whatever an iPhone is playing (Music, Spotify, podcasts, or any app that shows up on the lock screen). It reads this over Bluetooth Low Energy through Apple Media Service (AMS), the same service smartwatches use, so no app needs to be installed on the iPhone. Only iOS is supported for now.
 

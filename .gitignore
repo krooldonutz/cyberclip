@@ -4,3 +4,4 @@ dist-device/
 .vite/
 .pio/
 firmware/.pio/
+__pycache__/
