@@ -99,6 +99,22 @@ void test_power_policy() {
   TEST_ASSERT_TRUE(shouldRunAtFullSpeed(true, false, 2999, 3000));
   TEST_ASSERT_FALSE(shouldRunAtFullSpeed(true, false, 3000, 3000));
 
+  // Late GIF frames: a streak builds only from frames at least 8 ms late.
+  TEST_ASSERT_EQUAL_UINT8(0, updateLateFrameStreak(0, 0));
+  TEST_ASSERT_EQUAL_UINT8(0, updateLateFrameStreak(0, 7));
+  TEST_ASSERT_EQUAL_UINT8(1, updateLateFrameStreak(0, 8));
+  TEST_ASSERT_EQUAL_UINT8(3, updateLateFrameStreak(2, 500));
+  TEST_ASSERT_EQUAL_UINT8(0, updateLateFrameStreak(2, 3));
+  TEST_ASSERT_EQUAL_UINT8(255, updateLateFrameStreak(255, 100));
+
+  // Backlight is halved on battery but never turned off by it.
+  TEST_ASSERT_EQUAL_UINT8(128, backlightLevelFor(false, 128));
+  TEST_ASSERT_EQUAL_UINT8(255, backlightLevelFor(false, 255));
+  TEST_ASSERT_EQUAL_UINT8(64, backlightLevelFor(true, 128));
+  TEST_ASSERT_EQUAL_UINT8(127, backlightLevelFor(true, 255));
+  TEST_ASSERT_EQUAL_UINT8(1, backlightLevelFor(true, 1));
+  TEST_ASSERT_EQUAL_UINT8(0, backlightLevelFor(true, 0));
+
   TEST_ASSERT_FALSE(shouldSuspendWifi(false, false, 600000, 120000));
   TEST_ASSERT_FALSE(shouldSuspendWifi(true, false, 119999, 120000));
   TEST_ASSERT_TRUE(shouldSuspendWifi(true, false, 120000, 120000));

@@ -225,12 +225,31 @@ inline bool onBatteryPower(bool wasOnBattery, uint32_t millivolts) {
   return wasOnBattery;
 }
 
-// The CPU only drops to the reduced clock on battery while the screen is
-// static: no GIF playing, no transfer or overlay, and no protocol bytes for
-// *holdMs*. Anything that decodes or draws therefore runs at full speed.
-inline bool shouldRunAtFullSpeed(bool onBattery, bool animating,
+// The CPU only drops to the reduced clock on battery when nothing needs full
+// speed: no transfer or overlay, no protocol bytes for *holdMs*, and no GIF
+// that has fallen behind at the reduced clock (see updateLateFrameStreak).
+// A GIF that keeps up plays at the reduced clock.
+inline bool shouldRunAtFullSpeed(bool onBattery, bool needsFullSpeed,
                                  uint32_t msSinceActivity, uint32_t holdMs) {
-  return !onBattery || animating || msSinceActivity < holdMs;
+  return !onBattery || needsFullSpeed || msSinceActivity < holdMs;
+}
+
+// A GIF frame drawn at least this long after its deadline counts as late.
+constexpr uint32_t kLateFrameMs = 8;
+// This many late frames in a row at the reduced clock put the rest of that
+// GIF's playback back at full speed.
+constexpr uint8_t kLateFramesBeforeFullSpeed = 3;
+
+inline uint8_t updateLateFrameStreak(uint8_t streak, uint32_t msLate) {
+  if (msLate < kLateFrameMs) return 0;
+  return streak < UINT8_MAX ? static_cast<uint8_t>(streak + 1) : streak;
+}
+
+// On battery the backlight runs at half the level the app set. It only goes
+// fully dark when the app sets 0.
+inline uint8_t backlightLevelFor(bool onBattery, uint8_t level) {
+  if (!onBattery || level == 0) return level;
+  return level / 2 > 0 ? static_cast<uint8_t>(level / 2) : 1;
 }
 
 // On battery, WiFi turns off after this long without a protocol command (the
