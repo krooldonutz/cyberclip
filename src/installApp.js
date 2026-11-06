@@ -10,6 +10,7 @@ import {
   isDownloadPort,
   loadFirmwareVersions,
 } from './flasher.js';
+import { confirmAction } from './confirmDialog.js';
 import { SerialTransport } from './serial.js';
 import { registerServiceWorker } from './serviceWorker.js';
 
@@ -184,11 +185,12 @@ async function installFirmware() {
   const version = selectedVersion();
   if (!version) return;
   const older = versions.find((candidate) => candidate.latest)?.version !== version;
-  if (!globalThis.confirm(
-    `Install Cyberclip firmware ${version}${older ? ' (an older version)' : ''}? Your hotspot settings and saved media are kept. Keep the USB cable connected until installation finishes.`,
-  )) {
-    return;
-  }
+  const confirmed = await confirmAction({
+    title: `Install firmware ${version}?`,
+    message: `${older ? 'This is an older version than the latest release. ' : ''}Your hotspot settings and saved media are kept. Keep the USB cable connected until installation finishes.`,
+    confirmLabel: 'Install',
+  });
+  if (!confirmed) return;
 
   try {
     const port = await chooseFlashPort();

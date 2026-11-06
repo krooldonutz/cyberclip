@@ -9,6 +9,15 @@ import {
   parseStoredFrameResponse,
   parseStoredListResponse,
 } from './protocol.js';
+import { confirmAction } from './confirmDialog.js';
+
+// Shared by the upload page and the phone page.
+export const DELETE_ALL_CONFIRMATION = Object.freeze({
+  title: 'Delete all saved media?',
+  message: 'Every image and GIF saved on the device is removed and the screen is cleared. This cannot be undone.',
+  confirmLabel: 'Delete all',
+  destructive: true,
+});
 
 export async function listStoredMedia(transport) {
   const response = await transport.request(Command.LIST_STORED, new Uint8Array(), {
@@ -85,13 +94,13 @@ export class StoredMediaView {
     getTransport,
     canUseDevice,
     log,
-    confirm = (message) => globalThis.confirm(message),
+    askToConfirm = confirmAction,
   }) {
     this.elements = elements;
     this.getTransport = getTransport;
     this.canUseDevice = canUseDevice;
     this.log = log;
-    this.confirm = confirm;
+    this.askToConfirm = askToConfirm;
     this.library = null;
     this.thumbnails = new Map();
     this.working = false;
@@ -270,7 +279,13 @@ export class StoredMediaView {
   async remove(slot) {
     const item = this.library?.items.find((candidate) => candidate.slot === slot);
     const kind = item?.mediaType === MediaType.GIF ? 'GIF' : 'image';
-    if (!this.confirm(`Delete this saved ${kind} from the device? This cannot be undone.`)) return;
+    const confirmed = await this.askToConfirm({
+      title: `Delete this saved ${kind}?`,
+      message: `It is removed from the device's storage. This cannot be undone.`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    });
+    if (!confirmed) return;
     await this.runAction(async (transport) => {
       await transport.request(Command.DELETE_STORED, createSlotPayload(slot), { timeoutMs: 30000 });
       this.log(`Deleted saved ${kind}`);

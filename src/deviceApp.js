@@ -10,7 +10,8 @@ import {
   createFrameChunkPayload,
   createTransferIdPayload,
 } from './protocol.js';
-import { StoredMediaView, uploadErrorHint } from './storedMedia.js';
+import { confirmAction } from './confirmDialog.js';
+import { DELETE_ALL_CONFIRMATION, StoredMediaView, uploadErrorHint } from './storedMedia.js';
 import { WifiTransport } from './wifiTransport.js';
 
 const ids = [
@@ -135,9 +136,12 @@ async function connect() {
 // The board's hotspot is this page's only link, so turning it off ends the
 // session; holding BOOT on the board turns it back on.
 async function disconnectAndTurnOffHotspot() {
-  if (!globalThis.confirm(
-    'Disconnect and turn off the Cyberclip Wi-Fi? Hold BOOT on the board to turn it back on.',
-  )) return;
+  const confirmed = await confirmAction({
+    title: 'Turn off the Cyberclip Wi-Fi?',
+    message: 'This page disconnects, and your phone leaves the Cyberclip network. Hold BOOT on the board to turn the Wi-Fi back on.',
+    confirmLabel: 'Turn off Wi-Fi',
+  });
+  if (!confirmed) return;
   stopOperation();
   try {
     await transport.request(Command.TURN_OFF_HOTSPOT, new Uint8Array());
@@ -362,7 +366,7 @@ async function clearDisplay() {
 }
 
 async function removeStoredMedia() {
-  if (!globalThis.confirm('Delete everything saved on the device? This cannot be undone.')) return;
+  if (!(await confirmAction(DELETE_ALL_CONFIRMATION))) return;
   try {
     await transport.request(Command.CLEAR_STORED, new Uint8Array(), { timeoutMs: 30000 });
     await transport.request(Command.CLEAR_DISPLAY, createClearPayload(0));

@@ -129,7 +129,7 @@ constexpr uint32_t kSleepButtonDebounceMs = 30;
 constexpr uint32_t kHotspotButtonHoldMs = 1500;
 constexpr uint8_t kFirmwareMajor = 2;
 constexpr uint8_t kFirmwareMinor = 0;
-constexpr uint8_t kFirmwarePatch = 31;
+constexpr uint8_t kFirmwarePatch = 32;
 using board::kDeviceName;
 // Before the saved media library, the board kept one item: /playlist.meta
 // with frames in /aNNN.jpg or /bNNN.jpg. It is moved into slot 0 on boot.
