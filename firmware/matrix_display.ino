@@ -121,7 +121,8 @@ constexpr uint32_t kConservativeStoredBytes = 8 * 1024 * 1024;
 constexpr uint32_t kParserTimeoutMs = 1000;
 constexpr uint16_t kMinimumFrameDelayMs = 10;
 constexpr gpio_num_t kSleepButton = GPIO_NUM_0;
-// On the T-Display-S3, GPIO14 shows the battery overlay (see pollBatteryButton).
+// On the T-Display-S3, GPIO14 shows the next saved item when tapped and the
+// battery overlay when held (see pollBatteryButton).
 constexpr gpio_num_t kButtons[] = {kSleepButton};
 constexpr size_t kButtonCount = sizeof(kButtons) / sizeof(kButtons[0]);
 constexpr uint32_t kSleepButtonDebounceMs = 30;
@@ -130,8 +131,11 @@ constexpr uint8_t kFirmwareMajor = 2;
 constexpr uint8_t kFirmwareMinor = 0;
 constexpr uint8_t kFirmwarePatch = 26;
 using board::kDeviceName;
-constexpr char kMetadataPath[] = "/playlist.meta";
-constexpr char kMetadataTempPath[] = "/playlist.tmp";
+// Before the saved media library, the board kept one item: /playlist.meta
+// with frames in /aNNN.jpg or /bNNN.jpg. It is moved into slot 0 on boot.
+constexpr char kLegacyMetadataPath[] = "/playlist.meta";
+constexpr char kLegacyMetadataTempPath[] = "/playlist.tmp";
+constexpr char kActiveSlotPath[] = "/active";
 constexpr char kProgressLabel[] = "Media is being loaded";
 constexpr uint16_t kProgressBackgroundColor = 0x0000;
 constexpr uint16_t kProgressBorderColor = 0xffff;
@@ -158,15 +162,30 @@ struct Transfer {
 } transfer;
 
 struct Playlist {
-  uint16_t delays[255]{};
+  uint16_t delays[kMaxStoredFrames]{};
   uint16_t frameCount = 0;
   uint16_t storedCount = 0;
+  uint32_t bytes = 0;
+  uint32_t itemId = 0;
   uint8_t mediaType = 0;
   uint8_t rotation = 0;
-  uint8_t generation = 0;
+  uint8_t slot = 0;
   bool loop = false;
   bool valid = false;
 } activePlaylist, stagingPlaylist;
+
+// Summary of each saved item, read from its metadata at boot and kept up to
+// date as items are added and deleted, so listing never touches the flash.
+struct StoredItem {
+  uint32_t bytes = 0;
+  uint32_t itemId = 0;
+  uint16_t frameCount = 0;
+  uint8_t mediaType = 0;
+  uint8_t rotation = 0;
+  bool loop = false;
+  bool used = false;
+} storedItems[kMaxStoredItems];
+uint8_t activeSlot = kNoStoredSlot;
 
 struct Playback {
   uint16_t nextFrame = 0;
@@ -210,7 +229,7 @@ struct Framebuffer {
   // Set while the panel shows exactly the buffer's contents, so an overlay
   // can be removed by pushing the buffer again.
   bool presented = false;
-  uint8_t generation = 0;
+  uint8_t slot = 0;
   uint16_t frameIndex = 0;
 } framebuffer;
 
@@ -247,7 +266,7 @@ enum class ScreenContent : uint8_t { kFill, kPlaylistFrame, kLiveFrame, kProgres
 struct ScreenState {
   ScreenContent content = ScreenContent::kFill;
   uint16_t fillColor = 0;
-  uint8_t generation = 0;
+  uint8_t slot = 0;
   uint16_t playlistFrame = 0;
 } screen;
 
@@ -303,7 +322,23 @@ struct BatteryOverlay {
 struct {
   bool armed = false;
   bool pressed = false;
+  bool longHandled = false;
+  uint32_t pressedAt = 0;
 } batteryButton;
+
+// "2 of 3" in the top-left corner after a tap moves to another saved item.
+constexpr uint32_t kItemHintMs = 2000;
+constexpr int16_t kItemHintMargin = 4;
+constexpr int16_t kItemHintHeight = 22;
+struct {
+  bool visible = false;
+  uint32_t shownAt = 0;
+  uint8_t rotation = 0;
+  int16_t width = 0;
+  char text[20] = {};
+} itemHint;
+
+void showNextStoredItem();
 
 void releaseLiveFrame() {
   free(liveFrame.data);
@@ -391,6 +426,14 @@ void pollBatteryButton() {
     delay(kSleepButtonDebounceMs);
     if (digitalRead(board::kBatteryButton) != LOW) return;
     batteryButton.pressed = true;
+    batteryButton.longHandled = false;
+    batteryButton.pressedAt = millis();
+    return;
+  }
+  // Held: the battery indicator, which stays up until the button is let go.
+  if (pressed && batteryButton.pressed && !batteryButton.longHandled &&
+      isBatteryButtonHeld(batteryButton.pressedAt, millis())) {
+    batteryButton.longHandled = true;
     showBatteryOverlay();
     return;
   }
@@ -398,6 +441,9 @@ void pollBatteryButton() {
     delay(kSleepButtonDebounceMs);
     if (digitalRead(board::kBatteryButton) == LOW) return;
     batteryButton.pressed = false;
+    // A tap: the next saved item.
+    if (!batteryButton.longHandled) showNextStoredItem();
+    batteryButton.longHandled = false;
   }
 }
 
@@ -406,6 +452,45 @@ void pollBatteryOverlay() {
   if (batteryOverlay.visible && !batteryButton.pressed &&
       millis() - batteryOverlay.shownAt >= kBatteryOverlayMs) {
     hideBatteryOverlay();
+  }
+}
+
+void drawItemHint() {
+  itemHint.rotation = display.getRotation();
+  display.startWrite();
+  display.fillRoundRect(kItemHintMargin, kItemHintMargin, itemHint.width,
+                        kItemHintHeight, 4, TFT_BLACK);
+  display.drawRoundRect(kItemHintMargin, kItemHintMargin, itemHint.width,
+                        kItemHintHeight, 4, TFT_DARKGREY);
+  display.setTextSize(1);
+  display.setTextColor(TFT_WHITE, TFT_BLACK);
+  display.setTextDatum(middle_center);
+  display.drawString(itemHint.text, kItemHintMargin + itemHint.width / 2,
+                     kItemHintMargin + kItemHintHeight / 2);
+  display.setTextDatum(top_left);
+  display.endWrite();
+}
+
+void showItemHint(const char *text) {
+  if (screen.content == ScreenContent::kProgress) return;
+  snprintf(itemHint.text, sizeof(itemHint.text), "%s", text);
+  display.setTextSize(1);
+  itemHint.width = static_cast<int16_t>(display.textWidth(itemHint.text) + 14);
+  itemHint.visible = true;
+  itemHint.shownAt = millis();
+  drawItemHint();
+}
+
+void hideItemHint() {
+  if (!itemHint.visible) return;
+  itemHint.visible = false;
+  restoreUnderOverlay(kItemHintMargin, kItemHintMargin, itemHint.width,
+                      kItemHintHeight, itemHint.rotation);
+}
+
+void pollItemHint() {
+  if (itemHint.visible && millis() - itemHint.shownAt >= kItemHintMs) {
+    hideItemHint();
   }
 }
 
@@ -966,6 +1051,7 @@ void pollNowPlaying() {}
 
 void drawOverlays() {
   if (batteryOverlay.visible) drawBatteryOverlay();
+  if (itemHint.visible) drawItemHint();
   if (nowPlayingOverlay.visible && !nowPlayingScreen.visible) {
     drawNowPlayingOverlay();
   }
@@ -991,7 +1077,7 @@ void restoreUnderOverlay(int16_t x, int16_t y, int16_t width, int16_t height,
       // Both re-render through markScreen*(), which redraws the overlays.
       if (screen.content == ScreenContent::kPlaylistFrame &&
           activePlaylist.valid &&
-          activePlaylist.generation == screen.generation &&
+          activePlaylist.slot == screen.slot &&
           renderPlaylistFrame(activePlaylist, screen.playlistFrame)) {
         return;
       }
@@ -1020,6 +1106,7 @@ void onScreenChanged() {
   if (screen.content != ScreenContent::kLiveFrame) releaseLiveFrame();
   if (screen.content == ScreenContent::kProgress) {
     batteryOverlay.visible = false;
+    itemHint.visible = false;
     nowPlayingOverlay.visible = false;
     nowPlayingOverlay.onButton = false;
   } else {
@@ -1033,10 +1120,10 @@ void markScreenFill(uint16_t color) {
   onScreenChanged();
 }
 
-void markScreenPlaylistFrame(uint8_t generation, uint16_t frameIndex) {
+void markScreenPlaylistFrame(uint8_t slot, uint16_t frameIndex) {
   screen = ScreenState{};
   screen.content = ScreenContent::kPlaylistFrame;
-  screen.generation = generation;
+  screen.slot = slot;
   screen.playlistFrame = frameIndex;
   onScreenChanged();
 }
@@ -1239,20 +1326,44 @@ void releaseTransfer() {
   transfer = Transfer{};
 }
 
-void framePath(char *path, size_t length, uint8_t generation,
+void framePath(char *path, size_t length, uint8_t slot,
                uint16_t frameIndex) {
+  storedFramePath(path, length, slot, frameIndex);
+}
+
+void legacyFramePath(char *path, size_t length, uint8_t generation,
+                     uint16_t frameIndex) {
   snprintf(path, length, "/%c%03u.jpg", generation ? 'b' : 'a', frameIndex);
 }
 
-bool removeGeneration(uint8_t generation) {
-  if (!filesystemMounted) return false;
-  framebuffer.holdsPlaylistFrame = false;
-  bool removed = true;
-  char path[12];
-  for (uint16_t i = 0; i < 255; ++i) {
-    framePath(path, sizeof(path), generation, i);
-    if (LittleFS.exists(path) && !LittleFS.remove(path)) removed = false;
+bool removeIfExists(const char *path) {
+  return !LittleFS.exists(path) || LittleFS.remove(path);
+}
+
+void storedSlotsInUse(bool used[kMaxStoredItems]) {
+  for (uint8_t slot = 0; slot < kMaxStoredItems; ++slot) {
+    used[slot] = storedItems[slot].used;
   }
+}
+
+// Removes the frames and both metadata files of *slot*. Frames are always
+// written from 0 upwards, so the first missing one ends the frames; anything
+// left past a gap by a failed removal is cleared by removeStrayStorageFiles()
+// at the next boot.
+bool removeSlotFiles(uint8_t slot) {
+  if (!filesystemMounted) return false;
+  if (framebuffer.slot == slot) framebuffer.holdsPlaylistFrame = false;
+  bool removed = true;
+  char path[kStoredPathSize];
+  for (uint16_t i = 0; i < kMaxStoredFrames; ++i) {
+    framePath(path, sizeof(path), slot, i);
+    if (!LittleFS.exists(path)) break;
+    if (!LittleFS.remove(path)) removed = false;
+  }
+  storedMetadataPath(path, sizeof(path), slot, false);
+  if (!removeIfExists(path)) removed = false;
+  storedMetadataPath(path, sizeof(path), slot, true);
+  if (!removeIfExists(path)) removed = false;
   return removed;
 }
 
@@ -1260,13 +1371,10 @@ bool cancelStaging() {
   if (!stagingPlaylist.valid) return true;
   const uint8_t rotation = stagingPlaylist.rotation;
   if (transfer.active && transfer.persistent) releaseTransfer();
-  const bool removed = removeGeneration(stagingPlaylist.generation);
-  const bool tempRemoved =
-      !LittleFS.exists(kMetadataTempPath) ||
-      LittleFS.remove(kMetadataTempPath);
+  const bool removed = removeSlotFiles(stagingPlaylist.slot);
   stagingPlaylist = Playlist{};
   restoreActiveOrClear(rotation);
-  return removed && tempRemoved;
+  return removed;
 }
 
 void writeFrame(uint8_t command, uint16_t sequence, const uint8_t *payload,
@@ -1477,8 +1585,8 @@ bool decodePlaylistFrame(const Playlist &playlist, uint16_t frameIndex,
       frameIndex >= playlist.frameCount) {
     return false;
   }
-  char path[12];
-  framePath(path, sizeof(path), playlist.generation, frameIndex);
+  char path[kStoredPathSize];
+  framePath(path, sizeof(path), playlist.slot, frameIndex);
   uint8_t *data = nullptr;
   uint32_t size = 0;
   if (!readFileToBuffer(path, &data, &size)) return false;
@@ -1500,32 +1608,32 @@ bool decodePlaylistFrame(const Playlist &playlist, uint16_t frameIndex,
 void preparePlaylistFrame(const Playlist &playlist, uint16_t frameIndex) {
   if (!framebuffer.allocated ||
       (framebuffer.holdsPlaylistFrame &&
-       framebuffer.generation == playlist.generation &&
+       framebuffer.slot == playlist.slot &&
        framebuffer.frameIndex == frameIndex)) {
     return;
   }
   if (!decodePlaylistFrame(playlist, frameIndex, false)) return;
   framebuffer.holdsPlaylistFrame = true;
-  framebuffer.generation = playlist.generation;
+  framebuffer.slot = playlist.slot;
   framebuffer.frameIndex = frameIndex;
 }
 
 bool renderPlaylistFrame(const Playlist &playlist, uint16_t frameIndex) {
   if (framebuffer.holdsPlaylistFrame &&
-      framebuffer.generation == playlist.generation &&
+      framebuffer.slot == playlist.slot &&
       framebuffer.frameIndex == frameIndex && playlist.valid) {
     presentFramebuffer();
   } else if (!decodePlaylistFrame(playlist, frameIndex, true)) {
     return false;
   }
-  markScreenPlaylistFrame(playlist.generation, frameIndex);
+  markScreenPlaylistFrame(playlist.slot, frameIndex);
   return true;
 }
 
 bool playlistFilesExist(const Playlist &playlist) {
-  char path[12];
+  char path[kStoredPathSize];
   for (uint16_t i = 0; i < playlist.frameCount; ++i) {
-    framePath(path, sizeof(path), playlist.generation, i);
+    framePath(path, sizeof(path), playlist.slot, i);
     File file = LittleFS.open(path, FILE_READ);
     if (!file || file.size() == 0 || file.size() > kMaxFrameSize) {
       if (file) file.close();
@@ -1536,85 +1644,242 @@ bool playlistFilesExist(const Playlist &playlist) {
   return true;
 }
 
-bool loadActiveMetadata() {
-  activePlaylist = Playlist{};
-  if (!filesystemMounted) return false;
-  File file = LittleFS.open(kMetadataPath, FILE_READ);
+// Reads and checks /sNN.meta. Frame files are not checked here.
+bool readSlotMetadata(uint8_t slot, Playlist &out) {
+  out = Playlist{};
+  if (!filesystemMounted || slot >= kMaxStoredItems) return false;
+  char path[kStoredPathSize];
+  storedMetadataPath(path, sizeof(path), slot, false);
+  File file = LittleFS.open(path, FILE_READ);
   if (!file) return false;
   const size_t size = file.size();
-  if (size < playlistMetadataSize(1) || size > playlistMetadataSize(255)) {
+  if (size < storedItemMetadataSize(1) ||
+      size > storedItemMetadataSize(kMaxStoredFrames)) {
     file.close();
     return false;
   }
-  uint8_t metadata[playlistMetadataSize(255)];
-  if (file.read(metadata, size) != size) {
-    file.close();
-    return false;
-  }
+  uint8_t metadata[storedItemMetadataSize(kMaxStoredFrames)];
+  const bool read = file.read(metadata, size) == size;
   file.close();
-  if (!validatePlaylistMetadata(metadata, size)) return false;
+  if (!read || !validateStoredItemMetadata(metadata, size, slot)) return false;
 
   Playlist loaded;
-  loaded.generation = metadata[5];
+  loaded.slot = slot;
   loaded.mediaType = metadata[6];
   loaded.frameCount = metadata[7];
   loaded.storedCount = loaded.frameCount;
   loaded.rotation = metadata[8];
   loaded.loop = metadata[9] != 0;
-  loaded.valid = true;
+  loaded.bytes = readLe32(metadata + 10);
+  loaded.itemId = readLe32(metadata + 14);
   for (uint16_t i = 0; i < loaded.frameCount; ++i) {
     loaded.delays[i] =
-        readLe16(metadata + kPlaylistMetadataHeaderSize + i * 2);
+        readLe16(metadata + kStoredItemMetadataHeaderSize + i * 2);
     if (loaded.delays[i] < kMinimumFrameDelayMs) return false;
   }
-  if (!playlistFilesExist(loaded)) return false;
-  activePlaylist = loaded;
+  loaded.valid = true;
+  out = loaded;
   return true;
 }
 
-bool writeStagingMetadata() {
-  const size_t size =
-      playlistMetadataSize(static_cast<uint8_t>(stagingPlaylist.frameCount));
-  uint8_t metadata[playlistMetadataSize(255)]{};
+// Writes the playlist's metadata to /sNN.tmp and reads it back. The item
+// only appears once commitSlotMetadata() renames it into place.
+bool writeSlotMetadata(const Playlist &playlist) {
+  const uint8_t frameCount = static_cast<uint8_t>(playlist.frameCount);
+  const size_t size = storedItemMetadataSize(frameCount);
+  uint8_t metadata[storedItemMetadataSize(kMaxStoredFrames)]{};
   metadata[0] = 'C';
   metadata[1] = 'C';
-  metadata[2] = 'P';
-  metadata[3] = 'L';
-  metadata[4] = kPlaylistMetadataVersion;
-  metadata[5] = stagingPlaylist.generation;
-  metadata[6] = stagingPlaylist.mediaType;
-  metadata[7] = static_cast<uint8_t>(stagingPlaylist.frameCount);
-  metadata[8] = stagingPlaylist.rotation;
-  metadata[9] = stagingPlaylist.loop ? 1 : 0;
-  for (uint16_t i = 0; i < stagingPlaylist.frameCount; ++i) {
-    writeLe16(metadata + kPlaylistMetadataHeaderSize + i * 2,
-              stagingPlaylist.delays[i]);
+  metadata[2] = 'M';
+  metadata[3] = 'I';
+  metadata[4] = kStoredItemMetadataVersion;
+  metadata[5] = playlist.slot;
+  metadata[6] = playlist.mediaType;
+  metadata[7] = frameCount;
+  metadata[8] = playlist.rotation;
+  metadata[9] = playlist.loop ? 1 : 0;
+  writeLe32(metadata + 10, playlist.bytes);
+  writeLe32(metadata + 14, playlist.itemId);
+  for (uint16_t i = 0; i < frameCount; ++i) {
+    writeLe16(metadata + kStoredItemMetadataHeaderSize + i * 2,
+              playlist.delays[i]);
   }
   writeLe16(metadata + size - kPlaylistMetadataCrcSize,
             crc16CcittFalse(metadata, size - kPlaylistMetadataCrcSize));
 
-  LittleFS.remove(kMetadataTempPath);
-  File file = LittleFS.open(kMetadataTempPath, FILE_WRITE);
+  char path[kStoredPathSize];
+  storedMetadataPath(path, sizeof(path), playlist.slot, true);
+  LittleFS.remove(path);
+  File file = LittleFS.open(path, FILE_WRITE);
   if (!file) return false;
   const bool written = file.write(metadata, size) == size;
   file.flush();
   file.close();
   if (!written) {
-    LittleFS.remove(kMetadataTempPath);
+    LittleFS.remove(path);
     return false;
   }
 
-  File verify = LittleFS.open(kMetadataTempPath, FILE_READ);
-  uint8_t check[playlistMetadataSize(255)];
+  File verify = LittleFS.open(path, FILE_READ);
+  uint8_t check[storedItemMetadataSize(kMaxStoredFrames)];
   const bool verified =
       verify && verify.size() == size && verify.read(check, size) == size &&
-      validatePlaylistMetadata(check, size) &&
+      validateStoredItemMetadata(check, size, playlist.slot) &&
       memcmp(metadata, check, size) == 0;
   if (verify) verify.close();
   if (!verified) {
-    LittleFS.remove(kMetadataTempPath);
+    LittleFS.remove(path);
     return false;
   }
+  return true;
+}
+
+bool commitSlotMetadata(uint8_t slot) {
+  char temporary[kStoredPathSize];
+  char finalPath[kStoredPathSize];
+  storedMetadataPath(temporary, sizeof(temporary), slot, true);
+  storedMetadataPath(finalPath, sizeof(finalPath), slot, false);
+  return removeIfExists(finalPath) && LittleFS.rename(temporary, finalPath);
+}
+
+void rememberStoredItem(const Playlist &playlist) {
+  StoredItem &item = storedItems[playlist.slot];
+  item.bytes = playlist.bytes;
+  item.itemId = playlist.itemId;
+  item.frameCount = playlist.frameCount;
+  item.mediaType = playlist.mediaType;
+  item.rotation = playlist.rotation;
+  item.loop = playlist.loop;
+  item.used = true;
+}
+
+// /active holds the slot and its complement, so a torn write reads as none.
+void writeActiveSlot(uint8_t slot) {
+  activeSlot = slot;
+  if (!filesystemMounted) return;
+  File file = LittleFS.open(kActiveSlotPath, FILE_WRITE);
+  if (!file) return;
+  const uint8_t data[2] = {slot, static_cast<uint8_t>(~slot)};
+  file.write(data, sizeof(data));
+  file.close();
+}
+
+uint8_t readActiveSlot() {
+  File file = LittleFS.open(kActiveSlotPath, FILE_READ);
+  if (!file) return kNoStoredSlot;
+  uint8_t data[2] = {};
+  const bool read = file.read(data, sizeof(data)) == sizeof(data);
+  file.close();
+  if (!read || data[1] != static_cast<uint8_t>(~data[0]) ||
+      data[0] >= kMaxStoredItems) {
+    return kNoStoredSlot;
+  }
+  return data[0];
+}
+
+void loadStoredLibrary() {
+  for (uint8_t slot = 0; slot < kMaxStoredItems; ++slot) {
+    storedItems[slot] = StoredItem{};
+    Playlist item;
+    if (readSlotMetadata(slot, item)) rememberStoredItem(item);
+  }
+  activeSlot = readActiveSlot();
+  if (activeSlot == kNoStoredSlot || !storedItems[activeSlot].used) {
+    bool used[kMaxStoredItems];
+    storedSlotsInUse(used);
+    activeSlot = firstUsedStoredSlot(used);
+  }
+}
+
+// Moves the single item kept by firmware before the library into a slot.
+void migrateLegacyMedia() {
+  File file = LittleFS.open(kLegacyMetadataPath, FILE_READ);
+  if (!file) return;
+  const size_t size = file.size();
+  uint8_t metadata[playlistMetadataSize(kMaxStoredFrames)];
+  const bool read = size >= playlistMetadataSize(1) &&
+                    size <= sizeof(metadata) &&
+                    file.read(metadata, size) == size;
+  file.close();
+
+  if (read && validatePlaylistMetadata(metadata, size)) {
+    Playlist item;
+    item.slot = 0;
+    item.mediaType = metadata[6];
+    item.frameCount = metadata[7];
+    item.storedCount = item.frameCount;
+    item.rotation = metadata[8];
+    item.loop = metadata[9] != 0;
+    item.itemId = esp_random();
+    const uint8_t generation = metadata[5];
+    bool moved = removeSlotFiles(item.slot);
+    char from[kStoredPathSize];
+    char to[kStoredPathSize];
+    for (uint16_t i = 0; moved && i < item.frameCount; ++i) {
+      item.delays[i] = max(
+          readLe16(metadata + kPlaylistMetadataHeaderSize + i * 2),
+          kMinimumFrameDelayMs);
+      legacyFramePath(from, sizeof(from), generation, i);
+      framePath(to, sizeof(to), item.slot, i);
+      File frame = LittleFS.open(from, FILE_READ);
+      if (!frame) {
+        moved = false;
+        break;
+      }
+      item.bytes += frame.size();
+      frame.close();
+      moved = LittleFS.rename(from, to);
+    }
+    if (moved && writeSlotMetadata(item) && commitSlotMetadata(item.slot)) {
+      writeActiveSlot(item.slot);
+    } else {
+      removeSlotFiles(item.slot);
+    }
+  }
+  LittleFS.remove(kLegacyMetadataPath);
+  removeIfExists(kLegacyMetadataTempPath);
+}
+
+// Removes files no saved item owns: frames of an upload that was cut off by
+// a reset, unfinished metadata, and leftover frames from the old layout.
+void removeStrayStorageFiles() {
+  constexpr size_t kBatch = 32;
+  for (uint8_t pass = 0; pass < 16; ++pass) {
+    char doomed[kBatch][kStoredPathSize + 1];
+    size_t count = 0;
+    File root = LittleFS.open("/");
+    if (!root || !root.isDirectory()) return;
+    for (File entry = root.openNextFile(); entry && count < kBatch;
+         entry = root.openNextFile()) {
+      const char *name = entry.name();
+      if (name && *name == '/') ++name;
+      const uint8_t slot = storedFileSlot(name);
+      const bool stray =
+          isLegacyFrameName(name) ||
+          (slot != kNoStoredSlot &&
+           (!storedItems[slot].used || strstr(name, ".tmp") != nullptr));
+      if (stray && strlen(name) < kStoredPathSize) {
+        snprintf(doomed[count++], sizeof(doomed[0]), "/%s", name);
+      }
+      entry.close();
+    }
+    root.close();
+    if (count == 0) return;
+    for (size_t i = 0; i < count; ++i) LittleFS.remove(doomed[i]);
+  }
+}
+
+bool loadActiveMetadata() {
+  activePlaylist = Playlist{};
+  if (!filesystemMounted || activeSlot >= kMaxStoredItems ||
+      !storedItems[activeSlot].used) {
+    return false;
+  }
+  Playlist loaded;
+  if (!readSlotMetadata(activeSlot, loaded) || !playlistFilesExist(loaded)) {
+    return false;
+  }
+  activePlaylist = loaded;
   return true;
 }
 
@@ -1758,8 +2023,8 @@ void sendHotspotStatus(uint16_t sequence) {
 }
 
 bool persistTransferFrame() {
-  char path[12];
-  framePath(path, sizeof(path), stagingPlaylist.generation,
+  char path[kStoredPathSize];
+  framePath(path, sizeof(path), stagingPlaylist.slot,
             transfer.frameIndex);
   framebuffer.holdsPlaylistFrame = false;
   LittleFS.remove(path);
@@ -1779,26 +2044,192 @@ bool persistTransferFrame() {
   return validSize;
 }
 
+// Deletes every saved item, including an upload in progress.
 bool clearStoredMedia() {
   playback = Playback{};
   releaseTransfer();
   stagingPlaylist = Playlist{};
+  uploadProgress = UploadProgress{};
   if (!filesystemMounted) return false;
-  const bool metadataRemoved =
-      !LittleFS.exists(kMetadataPath) || LittleFS.remove(kMetadataPath);
-  const bool tempRemoved =
-      !LittleFS.exists(kMetadataTempPath) ||
-      LittleFS.remove(kMetadataTempPath);
-  const bool generationARemoved = removeGeneration(0);
-  const bool generationBRemoved = removeGeneration(1);
-  const bool generationsRemoved =
-      generationARemoved && generationBRemoved;
-  if (metadataRemoved && tempRemoved && generationsRemoved) {
-    activePlaylist = Playlist{};
-    return true;
+  activePlaylist = Playlist{};
+  bool removed = true;
+  for (uint8_t slot = 0; slot < kMaxStoredItems; ++slot) {
+    if (removeSlotFiles(slot)) storedItems[slot] = StoredItem{};
+    else removed = false;
   }
+  removeStrayStorageFiles();
+  if (!removeIfExists(kActiveSlotPath)) removed = false;
+  activeSlot = kNoStoredSlot;
+  if (removed) return true;
+  loadStoredLibrary();
   if (loadActiveMetadata()) startStoredPlayback();
   return false;
+}
+
+// Shows a saved item and remembers it as the one to show after a restart.
+// The previous item stays on screen if this one cannot be read.
+bool selectStoredSlot(uint8_t slot) {
+  if (slot >= kMaxStoredItems || !storedItems[slot].used) return false;
+  Playlist loaded;
+  if (!readSlotMetadata(slot, loaded) || !playlistFilesExist(loaded)) {
+    return false;
+  }
+  const Playlist previous = activePlaylist;
+  activePlaylist = loaded;
+  if (!startStoredPlayback()) {
+    activePlaylist = previous;
+    if (activePlaylist.valid) startStoredPlayback();
+    return false;
+  }
+  writeActiveSlot(slot);
+  return true;
+}
+
+// Tap on the second button: show the next saved item, wrapping
+// around, with a short "2 of 3" hint. With one item it is shown again (for
+// example after a live frame replaced it).
+void showNextStoredItem() {
+  // A battery indicator still up from an earlier hold is replaced along
+  // with the whole screen, so it just goes away.
+  const bool batteryWasVisible = batteryOverlay.visible;
+  batteryOverlay.visible = false;
+  if (transfer.active || stagingPlaylist.valid) {
+    if (batteryWasVisible) {
+      batteryOverlay.visible = true;
+      hideBatteryOverlay();
+    }
+    return;
+  }
+  bool used[kMaxStoredItems];
+  storedSlotsInUse(used);
+  const bool activeUsed = activeSlot < kMaxStoredItems && used[activeSlot];
+  uint8_t next = activeUsed ? nextStoredSlot(used, activeSlot)
+                            : firstUsedStoredSlot(used);
+  if (next == kNoStoredSlot && activeUsed) next = activeSlot;
+
+  // Skip items that cannot be read rather than stopping on them.
+  while (next != kNoStoredSlot && !selectStoredSlot(next)) {
+    used[next] = false;
+    next = nextStoredSlot(used, next);
+  }
+  if (next == kNoStoredSlot) {
+    if (batteryWasVisible) {
+      batteryOverlay.visible = true;
+      hideBatteryOverlay();
+    }
+    showItemHint("No saved media");
+    return;
+  }
+  storedSlotsInUse(used);
+  uint8_t position = 0;
+  uint8_t count = 0;
+  storedItemPosition(used, next, &position, &count);
+  char text[sizeof(itemHint.text)];
+  snprintf(text, sizeof(text), "%u of %u", static_cast<unsigned>(position),
+           static_cast<unsigned>(count));
+  showItemHint(text);
+}
+
+// Deletes one saved item. Deleting the item on screen moves on to the next
+// saved item, or clears the screen when it was the last one.
+bool deleteStoredSlot(uint8_t slot) {
+  const bool wasActive = slot == activeSlot;
+  const uint8_t rotation = activePlaylist.rotation;
+  if (wasActive) {
+    playback = Playback{};
+    activePlaylist = Playlist{};
+  }
+  const bool removed = removeSlotFiles(slot);
+  if (removed) storedItems[slot] = StoredItem{};
+  if (!wasActive) return removed;
+
+  bool used[kMaxStoredItems];
+  storedSlotsInUse(used);
+  uint8_t next = nextStoredSlot(used, slot);
+  while (next != kNoStoredSlot && !selectStoredSlot(next)) {
+    used[next] = false;
+    next = nextStoredSlot(used, slot);
+  }
+  if (next == kNoStoredSlot) {
+    writeActiveSlot(kNoStoredSlot);
+    display.setRotation(rotation);
+    display.fillScreen(TFT_BLACK);
+    markScreenFill(TFT_BLACK);
+  }
+  return removed;
+}
+
+void sendStoredList(uint16_t sequence) {
+  uint8_t payload[kStoredListHeaderSize +
+                  kMaxStoredItems * kStoredListEntrySize];
+  writeLe32(payload, static_cast<uint32_t>(LittleFS.totalBytes()));
+  writeLe32(payload + 4, static_cast<uint32_t>(LittleFS.usedBytes()));
+  payload[8] = kMaxStoredItems;
+  payload[9] = activeSlot < kMaxStoredItems && storedItems[activeSlot].used
+                   ? activeSlot
+                   : kNoStoredSlot;
+  uint8_t count = 0;
+  size_t offset = kStoredListHeaderSize;
+  for (uint8_t slot = 0; slot < kMaxStoredItems; ++slot) {
+    const StoredItem &item = storedItems[slot];
+    if (!item.used) continue;
+    payload[offset] = slot;
+    payload[offset + 1] = item.mediaType;
+    writeLe16(payload + offset + 2, item.frameCount);
+    payload[offset + 4] = item.rotation;
+    payload[offset + 5] = item.loop ? 1 : 0;
+    writeLe32(payload + offset + 6, item.bytes);
+    writeLe32(payload + offset + 10, item.itemId);
+    offset += kStoredListEntrySize;
+    ++count;
+  }
+  payload[10] = count;
+  writeFrame(STORED_LIST_RESPONSE, sequence, payload, offset);
+}
+
+void sendStoredFrame(uint16_t sequence, const uint8_t *request) {
+  const uint8_t slot = request[0];
+  const uint16_t frameIndex = readLe16(request + 1);
+  const uint32_t offset = readLe32(request + 3);
+  const uint16_t maxLength = readLe16(request + 7);
+  if (slot >= kMaxStoredItems || !storedItems[slot].used ||
+      frameIndex >= storedItems[slot].frameCount || maxLength == 0) {
+    sendNack(sequence, READ_STORED_FRAME, OUT_OF_RANGE);
+    return;
+  }
+  char path[kStoredPathSize];
+  framePath(path, sizeof(path), slot, frameIndex);
+  File file = LittleFS.open(path, FILE_READ);
+  if (!file) {
+    sendNack(sequence, READ_STORED_FRAME, OUT_OF_RANGE);
+    return;
+  }
+  const uint32_t size = static_cast<uint32_t>(file.size());
+  if (offset > size) {
+    file.close();
+    sendNack(sequence, READ_STORED_FRAME, OUT_OF_RANGE);
+    return;
+  }
+  uint32_t length = size - offset;
+  if (length > maxLength) length = maxLength;
+  if (length > kMaxStoredFrameReadData) length = kMaxStoredFrameReadData;
+
+  static uint8_t payload[kStoredFrameResponseHeaderSize +
+                         kMaxStoredFrameReadData];
+  payload[0] = slot;
+  writeLe16(payload + 1, frameIndex);
+  writeLe32(payload + 3, size);
+  writeLe32(payload + 7, offset);
+  const bool read = file.seek(offset) &&
+                    file.read(payload + kStoredFrameResponseHeaderSize,
+                              length) == length;
+  file.close();
+  if (!read) {
+    sendNack(sequence, READ_STORED_FRAME, NO_MEMORY);
+    return;
+  }
+  writeFrame(STORED_FRAME_RESPONSE, sequence, payload,
+             kStoredFrameResponseHeaderSize + length);
 }
 
 void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
@@ -1916,13 +2347,15 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
         return;
       }
       if (transfer.persistent && !persistTransferFrame()) {
-        sendNack(sequence, command, NO_MEMORY);
+        // Almost always a full flash.
+        sendNack(sequence, command, STORAGE_FULL);
         releaseTransfer();
         return;
       }
       if (transfer.persistent) {
         stagingPlaylist.delays[transfer.frameIndex] =
             max(transfer.delayMs, kMinimumFrameDelayMs);
+        stagingPlaylist.bytes += transfer.total;
         ++stagingPlaylist.storedCount;
         updateUploadProgress(stagingPlaylist.storedCount, 0, 0);
       } else if (!decodeTransfer(true)) {
@@ -2007,11 +2440,15 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
         sendNack(sequence, command, OUT_OF_RANGE);
         return;
       }
-      const uint8_t generation =
-          activePlaylist.valid ? activePlaylist.generation ^ 1 : 0;
-      if (!removeGeneration(generation) ||
-          (LittleFS.exists(kMetadataTempPath) &&
-           !LittleFS.remove(kMetadataTempPath))) {
+      // A new upload goes into a free slot; saved items are never replaced.
+      bool used[kMaxStoredItems];
+      storedSlotsInUse(used);
+      const uint8_t slot = firstFreeStoredSlot(used);
+      if (slot == kNoStoredSlot) {
+        sendNack(sequence, command, STORAGE_FULL);
+        return;
+      }
+      if (!removeSlotFiles(slot)) {
         sendNack(sequence, command, NO_MEMORY);
         return;
       }
@@ -2019,7 +2456,8 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
       stagingPlaylist.mediaType = mediaType;
       stagingPlaylist.frameCount = frameCount;
       stagingPlaylist.rotation = rotation;
-      stagingPlaylist.generation = generation;
+      stagingPlaylist.slot = slot;
+      stagingPlaylist.itemId = esp_random();
       stagingPlaylist.loop = loop;
       stagingPlaylist.valid = true;
       playback.running = false;
@@ -2046,17 +2484,21 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
         sendNack(sequence, command, SEQUENCE_ERROR);
         return;
       }
-      if (!writeStagingMetadata()) {
-        sendNack(sequence, command, NO_MEMORY);
+      if (!writeSlotMetadata(stagingPlaylist)) {
+        sendNack(sequence, command, STORAGE_FULL);
         return;
       }
       const Playlist previous = activePlaylist;
+      char temporary[kStoredPathSize];
+      storedMetadataPath(temporary, sizeof(temporary), stagingPlaylist.slot,
+                         true);
       if (!renderPlaylistFrame(stagingPlaylist, 0)) {
-        LittleFS.remove(kMetadataTempPath);
+        LittleFS.remove(temporary);
         sendNack(sequence, command, DECODE_FAILED);
         return;
       }
-      if (!LittleFS.rename(kMetadataTempPath, kMetadataPath)) {
+      if (!commitSlotMetadata(stagingPlaylist.slot)) {
+        LittleFS.remove(temporary);
         activePlaylist = previous;
         restoreActiveOrClear(stagingPlaylist.rotation);
         sendNack(sequence, command, NO_MEMORY);
@@ -2064,13 +2506,11 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
       }
       activePlaylist = stagingPlaylist;
       activePlaylist.valid = true;
+      rememberStoredItem(activePlaylist);
+      writeActiveSlot(activePlaylist.slot);
       stagingPlaylist = Playlist{};
       uploadProgress = UploadProgress{};
       schedulePlaybackAfterFirstFrame();
-      if (previous.valid &&
-          previous.generation != activePlaylist.generation) {
-        removeGeneration(previous.generation);
-      }
       sendAck(sequence, command);
       return;
     }
@@ -2091,6 +2531,45 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
       } else {
         if (clearStoredMedia()) sendAck(sequence, command);
         else sendNack(sequence, command, NO_MEMORY);
+      }
+      return;
+
+    case LIST_STORED:
+      if (length != 0) sendNack(sequence, command, INVALID_PAYLOAD);
+      else if (!filesystemMounted) sendNack(sequence, command, NO_MEMORY);
+      else sendStoredList(sequence);
+      return;
+
+    case SELECT_STORED:
+    case DELETE_STORED: {
+      if (length != 1) {
+        sendNack(sequence, command, INVALID_PAYLOAD);
+        return;
+      }
+      if (transfer.active || stagingPlaylist.valid) {
+        sendNack(sequence, command, cyberclip::BUSY);
+        return;
+      }
+      const uint8_t slot = payload[0];
+      if (slot >= kMaxStoredItems || !storedItems[slot].used) {
+        sendNack(sequence, command, OUT_OF_RANGE);
+        return;
+      }
+      const bool done = command == SELECT_STORED ? selectStoredSlot(slot)
+                                                 : deleteStoredSlot(slot);
+      if (done) sendAck(sequence, command);
+      else if (command == SELECT_STORED) sendNack(sequence, command, DECODE_FAILED);
+      else sendNack(sequence, command, NO_MEMORY);
+      return;
+    }
+
+    case READ_STORED_FRAME:
+      if (length != kReadStoredFramePayloadSize) {
+        sendNack(sequence, command, INVALID_PAYLOAD);
+      } else if (!filesystemMounted) {
+        sendNack(sequence, command, NO_MEMORY);
+      } else {
+        sendStoredFrame(sequence, payload);
       }
       return;
 
@@ -2349,7 +2828,12 @@ void setup() {
 
   filesystemMounted = LittleFS.begin(false);
   if (!filesystemMounted) filesystemMounted = LittleFS.begin(true);
-  if (filesystemMounted && loadActiveMetadata()) startStoredPlayback();
+  if (filesystemMounted) {
+    migrateLegacyMedia();
+    loadStoredLibrary();
+    removeStrayStorageFiles();
+    if (loadActiveMetadata()) startStoredPlayback();
+  }
 
   wifiManager.begin();
 #if CYBERCLIP_BLE_MEDIA
@@ -2399,6 +2883,7 @@ void loop() {
   pollButtons();
   pollBatteryButton();
   pollBatteryOverlay();
+  pollItemHint();
   pollNowPlaying();
   updatePowerMode();
 

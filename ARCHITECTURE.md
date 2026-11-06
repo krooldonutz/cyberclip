@@ -48,7 +48,7 @@ Both browser entries import the same `images.js`, `gifs.js`, `protocol.js`, and 
 - non-blocking byte-wise protocol parsers, one fed from USB serial and one from the WiFi transport (see below), each replying to its own connection;
 - bounded compressed-frame transfer state;
 - a two-pass JPEG validation/render path;
-- dual-generation LittleFS persistence and firmware-side GIF scheduling;
+- a LittleFS saved media library (up to 16 items) and firmware-side GIF scheduling;
 - rotation, clear, status, backlight, and WiFi provisioning behavior.
 
 `firmware/protocol.h` contains shared numeric definitions, little-endian helpers, and the CRC implementation. Its pure helpers are exercised by the PlatformIO native test.
@@ -92,7 +92,7 @@ The CRC starts at the version byte and ends after the payload. Maximum wire payl
 
 `CANCEL_TRANSFER` frees an incomplete buffer. `SET_BACKLIGHT`, `CLEAR_DISPLAY`, and `GET_STATUS` provide device controls and diagnostics.
 
-`BEGIN_PLAYLIST` starts an inactive flash generation. Persistent `BEGIN_FRAME` requests identify frame index and delay; each committed JPEG is written to that generation. `END_PLAYLIST` validates the complete set and atomically switches metadata to the new generation. `PLAY_STORED` resumes it and `CLEAR_STORED` removes both generations.
+`BEGIN_PLAYLIST` picks a free library slot (`STORAGE_FULL` when all 16 are used). Persistent `BEGIN_FRAME` requests identify frame index and delay; each committed JPEG is written to `/sNNfFFF.jpg` in that slot. `END_PLAYLIST` validates the complete set, writes `/sNN.tmp` and renames it to `/sNN.meta`, which is the moment the item exists; `/active` records the item on screen. `LIST_STORED`, `SELECT_STORED`, `DELETE_STORED` and `READ_STORED_FRAME` list, show, delete and preview items. `PLAY_STORED` resumes the active item and `CLEAR_STORED` removes every item. At boot, the single item kept by older firmware (`/playlist.meta` with `/aNNN.jpg` or `/bNNN.jpg`) is moved into slot 0, and files that belong to no item (an upload cut off by a reset) are removed.
 
 ## Failure behavior
 
@@ -107,7 +107,7 @@ The CRC starts at the version byte and ends after the payload. Maximum wire payl
 
 ## GIF pipeline
 
-The browser composites each source GIF frame according to transparency and disposal rules, resizes it to the selected display rotation, JPEG-encodes it, transfers it, and waits for render acknowledgement. With persistence disabled, the browser schedules those frames directly. With persistence enabled, the firmware shows byte-level progress across the complete playlist while each frame is validated and stored without rendering it. After the inactive LittleFS generation is complete and atomically activated, the firmware renders the first frame and schedules playback.
+The browser composites each source GIF frame according to transparency and disposal rules, resizes it to the selected display rotation, JPEG-encodes it, transfers it, and waits for render acknowledgement. With persistence disabled, the browser schedules those frames directly. With persistence enabled, the firmware shows byte-level progress across the complete playlist while each frame is validated and stored without rendering it. After the new library item is complete and atomically added, the firmware renders the first frame and schedules playback.
 
 The effective interval for each frame is:
 

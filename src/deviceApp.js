@@ -10,6 +10,7 @@ import {
   createFrameChunkPayload,
   createTransferIdPayload,
 } from './protocol.js';
+import { StoredMediaView, uploadErrorHint } from './storedMedia.js';
 import { WifiTransport } from './wifiTransport.js';
 
 const ids = [
@@ -18,7 +19,8 @@ const ids = [
   'transfer-progress', 'progress-label', 'progress-value', 'fit-select', 'rotation-select',
   'background-input', 'quality-input', 'quality-output', 'backlight-input',
   'backlight-output', 'gif-delay-input', 'loop-input', 'persist-input', 'retry-button',
-  'activity-log', 'log-template',
+  'activity-log', 'log-template', 'library-refresh-button', 'library-usage-label',
+  'library-count', 'library-usage', 'library-empty', 'library-list',
 ];
 const elements = Object.fromEntries(ids.map((id) => [id, document.getElementById(id)]));
 const DEFAULT_CAPABILITIES = {
@@ -54,10 +56,26 @@ const transport = new WifiTransport({
     if (['connecting', 'handshaking', 'ready', 'disconnected'].includes(nextState)) {
       setState(nextState);
     }
+    if (nextState === 'ready') void storedMediaView.refresh();
+    if (nextState === 'disconnected') storedMediaView.reset();
   },
   onProtocolError(error) {
     log(error.message, 'error');
   },
+});
+
+const storedMediaView = new StoredMediaView({
+  elements: {
+    list: elements['library-list'],
+    empty: elements['library-empty'],
+    usageLabel: elements['library-usage-label'],
+    usageBar: elements['library-usage'],
+    count: elements['library-count'],
+    refreshButton: elements['library-refresh-button'],
+  },
+  getTransport: () => transport,
+  canUseDevice: () => state === 'ready',
+  log,
 });
 
 initialize();
@@ -172,10 +190,11 @@ async function displayImage() {
     log(`${persist ? 'Saved and displayed' : 'Displayed'} ${prepared.width}×${prepared.height} JPEG`);
   } catch (error) {
     await cancelUpload();
-    if (error.name !== 'AbortError') log(`Display failed: ${error.message}`, 'error');
+    if (error.name !== 'AbortError') logUploadFailure('Display failed', error);
   } finally {
     operationController = null;
     setState(transport.connected ? 'ready' : 'disconnected');
+    if (persist) void storedMediaView.refresh();
   }
 }
 
@@ -213,10 +232,11 @@ async function playGif() {
     setProgress(100, persist ? 'Saved and playing on device' : 'Playback complete');
   } catch (error) {
     await cancelUpload();
-    if (error.name !== 'AbortError') log(`GIF playback failed: ${error.message}`, 'error');
+    if (error.name !== 'AbortError') logUploadFailure('GIF playback failed', error);
   } finally {
     operationController = null;
     setState(transport.connected ? 'ready' : 'disconnected');
+    if (persist) void storedMediaView.refresh();
   }
 }
 
@@ -316,13 +336,21 @@ async function clearDisplay() {
 }
 
 async function removeStoredMedia() {
+  if (!globalThis.confirm('Delete everything saved on the device? This cannot be undone.')) return;
   try {
-    await transport.request(Command.CLEAR_STORED, new Uint8Array(), { timeoutMs: 12000 });
+    await transport.request(Command.CLEAR_STORED, new Uint8Array(), { timeoutMs: 30000 });
     await transport.request(Command.CLEAR_DISPLAY, createClearPayload(0));
-    log('Saved media removed');
+    log('All saved media deleted');
   } catch (error) {
-    log(`Could not remove saved media: ${error.message}`, 'error');
+    log(`Could not delete saved media: ${error.message}`, 'error');
   }
+  void storedMediaView.refresh();
+}
+
+function logUploadFailure(prefix, error) {
+  log(`${prefix}: ${error.message}`, 'error');
+  const hint = uploadErrorHint(error);
+  if (hint) log(hint, 'error');
 }
 
 function imageOptions() {
@@ -364,6 +392,7 @@ function setState(nextState) {
     playing: 'Playing GIF',
     disconnected: 'Disconnected',
   }[nextState] ?? nextState;
+  storedMediaView.updateButtons();
 }
 
 function showPreview(blob) {

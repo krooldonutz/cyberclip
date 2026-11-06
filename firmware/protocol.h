@@ -2,6 +2,8 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
 namespace cyberclip {
 
@@ -41,8 +43,20 @@ enum Command : uint8_t {
   // BEGIN_PLAYLIST: mediaType u8, frameCount u16, loop u8, rotation u8.
   BEGIN_PLAYLIST = 0x30,
   END_PLAYLIST = 0x31,
+  // PLAY_STORED plays the active saved item; CLEAR_STORED deletes every item.
   PLAY_STORED = 0x32,
   CLEAR_STORED = 0x33,
+  // Saved media library (up to kMaxStoredItems items). A finished upload is
+  // added as a new item and becomes the active one; it never replaces another.
+  // LIST_STORED: no payload. Replies STORED_LIST_RESPONSE.
+  LIST_STORED = 0x34,
+  // SELECT_STORED / DELETE_STORED: slot u8. Reply ACK.
+  SELECT_STORED = 0x35,
+  DELETE_STORED = 0x36,
+  // READ_STORED_FRAME: slot u8, frameIndex u16, offset u32, maxLength u16.
+  // Replies STORED_FRAME_RESPONSE with up to maxLength bytes of that frame's
+  // stored JPEG, so the app can show what each item is.
+  READ_STORED_FRAME = 0x37,
   // SET_WIFI_CREDENTIALS: ssidLength u8, ssid bytes, passwordLength u8,
   // password bytes. Sent over USB during one-time pairing.
   SET_WIFI_CREDENTIALS = 0x40,
@@ -65,6 +79,14 @@ enum Command : uint8_t {
   // passwordConfigured u8, AP IPv4 4 bytes, ssidLength u8, SSID bytes.
   // The AP address is 192.168.4.1 while running and 0.0.0.0 otherwise.
   HOTSPOT_STATUS_RESPONSE = 0xA4,
+  // STORED_LIST_RESPONSE: totalBytes u32, usedBytes u32, maxItems u8,
+  // activeSlot u8 (kNoStoredSlot when none), count u8, then count entries of
+  // slot u8, mediaType u8, frameCount u16, rotation u8, loop u8, bytes u32,
+  // itemId u32 (kStoredListEntrySize bytes each).
+  STORED_LIST_RESPONSE = 0xA5,
+  // STORED_FRAME_RESPONSE: slot u8, frameIndex u16, totalSize u32, offset u32,
+  // then the data bytes.
+  STORED_FRAME_RESPONSE = 0xA6,
   ACK = 0xF0,
   NACK = 0xF1,
 };
@@ -117,6 +139,8 @@ enum ErrorCode : uint8_t {
   DECODE_FAILED = 8,
   NO_ACTIVE_TRANSFER = 9,
   SEQUENCE_ERROR = 10,
+  // No free item slot, or the flash ran out while saving an upload.
+  STORAGE_FULL = 11,
 };
 
 inline uint16_t crc16CcittFalseUpdate(uint16_t crc, uint8_t value) {
@@ -304,6 +328,153 @@ inline bool validatePlaylistMetadata(const uint8_t *data, size_t length) {
   }
   const uint16_t expected = readLe16(data + length - kPlaylistMetadataCrcSize);
   return expected == crc16CcittFalse(data, length - kPlaylistMetadataCrcSize);
+}
+
+// --- Saved media library ---------------------------------------------------
+//
+// Each saved item lives in its own slot: frames at /sNNfFFF.jpg and metadata
+// at /sNN.meta. An upload is staged in a free slot and only appears once its
+// metadata is renamed into place, so an interrupted upload never touches the
+// items already saved. The active slot is kept in /active.
+
+constexpr uint8_t kMaxStoredItems = 16;
+constexpr uint8_t kNoStoredSlot = 0xFF;
+constexpr uint8_t kMaxStoredFrames = 255;
+constexpr uint8_t kStoredItemMetadataVersion = 1;
+// "CCMI", version, slot, media type, frame count, rotation, loop,
+// bytes u32, itemId u32.
+constexpr size_t kStoredItemMetadataHeaderSize = 18;
+constexpr size_t kStoredListHeaderSize = 11;
+constexpr size_t kStoredListEntrySize = 14;
+constexpr size_t kReadStoredFramePayloadSize = 9;
+constexpr size_t kStoredFrameResponseHeaderSize = 11;
+constexpr uint16_t kMaxStoredFrameReadData =
+    static_cast<uint16_t>(kMaxWirePayload - kStoredFrameResponseHeaderSize);
+// Longest path below plus its terminator, rounded up.
+constexpr size_t kStoredPathSize = 16;
+
+static_assert(kStoredListHeaderSize +
+                      kMaxStoredItems * kStoredListEntrySize <=
+                  kMaxWirePayload,
+              "The saved media list must fit in one reply");
+
+constexpr size_t storedItemMetadataSize(uint8_t frameCount) {
+  return kStoredItemMetadataHeaderSize +
+         static_cast<size_t>(frameCount) * sizeof(uint16_t) +
+         kPlaylistMetadataCrcSize;
+}
+
+inline bool validateStoredItemMetadata(const uint8_t *data, size_t length,
+                                       uint8_t expectedSlot) {
+  if (!data || length < storedItemMetadataSize(1) ||
+      data[0] != 'C' || data[1] != 'C' || data[2] != 'M' ||
+      data[3] != 'I' || data[4] != kStoredItemMetadataVersion ||
+      data[5] != expectedSlot || data[5] >= kMaxStoredItems ||
+      (data[6] != MEDIA_IMAGE && data[6] != MEDIA_GIF) ||
+      data[7] == 0 || data[8] > 3 || data[9] > 1 ||
+      (data[6] == MEDIA_IMAGE && data[7] != 1) ||
+      length != storedItemMetadataSize(data[7])) {
+    return false;
+  }
+  const uint16_t expected = readLe16(data + length - kPlaylistMetadataCrcSize);
+  return expected == crc16CcittFalse(data, length - kPlaylistMetadataCrcSize);
+}
+
+inline void storedFramePath(char *path, size_t size, uint8_t slot,
+                            uint16_t frameIndex) {
+  snprintf(path, size, "/s%02uf%03u.jpg", static_cast<unsigned>(slot),
+           static_cast<unsigned>(frameIndex));
+}
+
+inline void storedMetadataPath(char *path, size_t size, uint8_t slot,
+                               bool temporary) {
+  snprintf(path, size, temporary ? "/s%02u.tmp" : "/s%02u.meta",
+           static_cast<unsigned>(slot));
+}
+
+// The lowest slot not in use, or kNoStoredSlot when every slot is taken.
+inline uint8_t firstFreeStoredSlot(const bool used[kMaxStoredItems]) {
+  for (uint8_t slot = 0; slot < kMaxStoredItems; ++slot) {
+    if (!used[slot]) return slot;
+  }
+  return kNoStoredSlot;
+}
+
+// The lowest slot in use, or kNoStoredSlot when the library is empty.
+inline uint8_t firstUsedStoredSlot(const bool used[kMaxStoredItems]) {
+  for (uint8_t slot = 0; slot < kMaxStoredItems; ++slot) {
+    if (used[slot]) return slot;
+  }
+  return kNoStoredSlot;
+}
+
+inline bool isAsciiDigit(char c) { return c >= '0' && c <= '9'; }
+
+// The slot a library file belongs to ("sNNfFFF.jpg", "sNN.meta" or
+// "sNN.tmp", with or without a leading '/'), or kNoStoredSlot for any other
+// file name.
+inline uint8_t storedFileSlot(const char *name) {
+  if (!name) return kNoStoredSlot;
+  if (*name == '/') ++name;
+  if (name[0] != 's' || !isAsciiDigit(name[1]) || !isAsciiDigit(name[2])) {
+    return kNoStoredSlot;
+  }
+  const unsigned slot = static_cast<unsigned>(name[1] - '0') * 10 +
+                        static_cast<unsigned>(name[2] - '0');
+  if (slot >= kMaxStoredItems) return kNoStoredSlot;
+  const char *rest = name + 3;
+  const bool metadata = strcmp(rest, ".meta") == 0 || strcmp(rest, ".tmp") == 0;
+  const bool frame = rest[0] == 'f' && isAsciiDigit(rest[1]) &&
+                     isAsciiDigit(rest[2]) && isAsciiDigit(rest[3]) &&
+                     strcmp(rest + 4, ".jpg") == 0;
+  return metadata || frame ? static_cast<uint8_t>(slot) : kNoStoredSlot;
+}
+
+// A frame file from before the saved media library ("aNNN.jpg"/"bNNN.jpg").
+inline bool isLegacyFrameName(const char *name) {
+  if (!name) return false;
+  if (*name == '/') ++name;
+  return (name[0] == 'a' || name[0] == 'b') && isAsciiDigit(name[1]) &&
+         isAsciiDigit(name[2]) && isAsciiDigit(name[3]) &&
+         strcmp(name + 4, ".jpg") == 0;
+}
+
+// Where *slot* sits among the saved items, 1-based, for the "2 of 3" hint.
+// Returns false when *slot* is not in use.
+inline bool storedItemPosition(const bool used[kMaxStoredItems], uint8_t slot,
+                               uint8_t *position, uint8_t *count) {
+  uint8_t seen = 0;
+  uint8_t found = 0;
+  for (uint8_t i = 0; i < kMaxStoredItems; ++i) {
+    if (!used[i]) continue;
+    ++seen;
+    if (i == slot) found = seen;
+  }
+  *position = found;
+  *count = seen;
+  return found != 0;
+}
+
+// The second button: a tap shows the next saved item, and holding it for
+// this long shows the battery indicator instead (released sooner, it was a
+// tap).
+constexpr uint32_t kBatteryButtonHoldMs = 500;
+
+inline bool isBatteryButtonHeld(uint32_t pressedAt, uint32_t now) {
+  return now - pressedAt >= kBatteryButtonHoldMs;
+}
+
+// The next slot in use after *from*, wrapping around and never *from*
+// itself, or kNoStoredSlot when no other slot is in use. Used to pick what
+// to show after the active item is deleted.
+inline uint8_t nextStoredSlot(const bool used[kMaxStoredItems], uint8_t from) {
+  for (uint8_t step = 1; step < kMaxStoredItems; ++step) {
+    const uint8_t slot =
+        static_cast<uint8_t>((static_cast<unsigned>(from) + step) %
+                             kMaxStoredItems);
+    if (used[slot]) return slot;
+  }
+  return kNoStoredSlot;
 }
 
 }  // namespace cyberclip

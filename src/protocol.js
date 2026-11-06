@@ -17,6 +17,10 @@ export const Command = Object.freeze({
   END_PLAYLIST: 0x31,
   PLAY_STORED: 0x32,
   CLEAR_STORED: 0x33,
+  LIST_STORED: 0x34,
+  SELECT_STORED: 0x35,
+  DELETE_STORED: 0x36,
+  READ_STORED_FRAME: 0x37,
   SET_WIFI_CREDENTIALS: 0x40,
   GET_WIFI_STATUS: 0x41,
   CLEAR_WIFI_CREDENTIALS: 0x42,
@@ -27,6 +31,8 @@ export const Command = Object.freeze({
   STATUS_RESPONSE: 0xa2,
   WIFI_STATUS_RESPONSE: 0xa3,
   HOTSPOT_STATUS_RESPONSE: 0xa4,
+  STORED_LIST_RESPONSE: 0xa5,
+  STORED_FRAME_RESPONSE: 0xa6,
   ACK: 0xf0,
   NACK: 0xf1,
 });
@@ -57,7 +63,11 @@ export const ErrorCode = Object.freeze({
   8: 'JPEG decode failed',
   9: 'No transfer is active',
   10: 'Transfer sequence is invalid',
+  11: 'Saved media storage is full',
 });
+
+export const ERROR_UNSUPPORTED_COMMAND = 2;
+export const ERROR_STORAGE_FULL = 11;
 
 export const Codec = Object.freeze({
   JPEG: 1,
@@ -330,6 +340,87 @@ export function parseHotspotStatusResponse(payload) {
     passwordConfigured: payload[2] === 1,
     ip: Array.from(payload.subarray(3, 7)).join('.'),
     ssid: new TextDecoder().decode(payload.subarray(8)),
+  };
+}
+
+export const MediaType = Object.freeze({
+  IMAGE: 1,
+  GIF: 2,
+});
+
+export const NO_STORED_SLOT = 0xff;
+const STORED_LIST_HEADER_SIZE = 11;
+const STORED_LIST_ENTRY_SIZE = 14;
+const STORED_FRAME_HEADER_SIZE = 11;
+export const MAX_STORED_FRAME_READ = MAX_WIRE_PAYLOAD - STORED_FRAME_HEADER_SIZE;
+
+export function createSlotPayload(slot) {
+  if (!Number.isInteger(slot) || slot < 0 || slot >= NO_STORED_SLOT) {
+    throw new ProtocolError('Saved item slot is invalid');
+  }
+  return Uint8Array.of(slot);
+}
+
+export function createReadStoredFramePayload({
+  slot,
+  frameIndex = 0,
+  offset = 0,
+  maxLength = MAX_STORED_FRAME_READ,
+}) {
+  const payload = new Uint8Array(9);
+  const view = new DataView(payload.buffer);
+  view.setUint8(0, createSlotPayload(slot)[0]);
+  view.setUint16(1, frameIndex, true);
+  view.setUint32(3, offset, true);
+  view.setUint16(7, Math.max(1, Math.min(MAX_STORED_FRAME_READ, maxLength)), true);
+  return payload;
+}
+
+export function parseStoredListResponse(payload) {
+  if (payload.byteLength < STORED_LIST_HEADER_SIZE) {
+    throw new ProtocolError('Device returned an incomplete saved media list');
+  }
+  const view = viewOf(payload);
+  const count = view.getUint8(10);
+  if (payload.byteLength !== STORED_LIST_HEADER_SIZE + count * STORED_LIST_ENTRY_SIZE) {
+    throw new ProtocolError('Device returned an invalid saved media list');
+  }
+  const activeSlot = view.getUint8(9);
+  const items = [];
+  for (let index = 0; index < count; index += 1) {
+    const offset = STORED_LIST_HEADER_SIZE + index * STORED_LIST_ENTRY_SIZE;
+    const slot = view.getUint8(offset);
+    items.push({
+      slot,
+      mediaType: view.getUint8(offset + 1),
+      frameCount: view.getUint16(offset + 2, true),
+      rotation: view.getUint8(offset + 4),
+      loop: view.getUint8(offset + 5) === 1,
+      bytes: view.getUint32(offset + 6, true),
+      itemId: view.getUint32(offset + 10, true),
+      active: slot === activeSlot,
+    });
+  }
+  return {
+    totalBytes: view.getUint32(0, true),
+    usedBytes: view.getUint32(4, true),
+    maxItems: view.getUint8(8),
+    activeSlot: activeSlot === NO_STORED_SLOT ? null : activeSlot,
+    items,
+  };
+}
+
+export function parseStoredFrameResponse(payload) {
+  if (payload.byteLength < STORED_FRAME_HEADER_SIZE) {
+    throw new ProtocolError('Device returned an incomplete saved frame');
+  }
+  const view = viewOf(payload);
+  return {
+    slot: view.getUint8(0),
+    frameIndex: view.getUint16(1, true),
+    totalSize: view.getUint32(3, true),
+    offset: view.getUint32(7, true),
+    data: payload.subarray(STORED_FRAME_HEADER_SIZE),
   };
 }
 
