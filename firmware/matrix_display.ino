@@ -258,6 +258,8 @@ bool decodeJpegBuffer(uint8_t *data, uint32_t size, uint16_t width,
 bool renderPlaylistFrame(const Playlist &playlist, uint16_t frameIndex);
 void presentFramebuffer();
 void drawOverlays();
+void drawHotspotQr();
+void cancelHotspotFromQr();
 void restoreUnderOverlay(int16_t x, int16_t y, int16_t width, int16_t height,
                          uint8_t rotation);
 
@@ -295,7 +297,18 @@ struct {
 } nowPlayingScreen;
 
 // Stored GIF playback that is actually advancing on the panel.
-bool playbackActive() { return playback.running && !nowPlayingScreen.visible; }
+// Full-screen hotspot QR codes, drawn over whatever the screen holds (which
+// is redrawn when they hide). See HotspotQrStage in protocol.h.
+struct HotspotQr {
+  HotspotQrStage stage = HotspotQrStage::kHidden;
+  uint32_t stageAt = 0;
+  uint8_t rotation = 0;  // Rotation of the screen underneath.
+  bool visible() const { return stage != HotspotQrStage::kHidden; }
+} hotspotQr;
+
+bool playbackActive() {
+  return playback.running && !nowPlayingScreen.visible && !hotspotQr.visible();
+}
 
 constexpr uint32_t kBatteryOverlayMs = 3000;
 constexpr uint8_t kBatterySamples = 16;
@@ -442,7 +455,11 @@ void pollBatteryButton() {
     if (digitalRead(board::kBatteryButton) == LOW) return;
     batteryButton.pressed = false;
     // A tap: the next saved item.
-    if (!batteryButton.longHandled) showNextStoredItem();
+    if (!batteryButton.longHandled) {
+      // A tap on a hotspot QR screen undoes the BOOT hold instead.
+      if (hotspotQr.visible()) cancelHotspotFromQr();
+      else showNextStoredItem();
+    }
     batteryButton.longHandled = false;
   }
 }
@@ -946,6 +963,7 @@ void drawNowPlayingScreen() {
 void showNowPlayingScreen() {
   // Uploads keep their progress screen.
   if (screen.content == ScreenContent::kProgress || transfer.active) return;
+  if (hotspotQr.visible()) return;
   if (!nowPlayingScreen.visible) {
     nowPlayingScreen.rotation = display.getRotation();
     nowPlayingScreen.visible = true;
@@ -1061,6 +1079,10 @@ void drawOverlays() {
 // was hidden, then draws the overlays that are still visible.
 void restoreUnderOverlay(int16_t x, int16_t y, int16_t width, int16_t height,
                          uint8_t rotation) {
+  if (hotspotQr.visible()) {
+    drawHotspotQr();
+    return;
+  }
   if (nowPlayingScreen.visible) {
     drawNowPlayingScreen();
     drawOverlays();
@@ -1101,8 +1123,10 @@ void restoreUnderOverlay(int16_t x, int16_t y, int16_t width, int16_t height,
 }
 
 void onScreenChanged() {
-  // New media, a message, or upload progress replaced the now-playing screen.
+  // New media, a message, or upload progress replaced the now-playing screen
+  // and the hotspot QR codes.
   nowPlayingScreen.visible = false;
+  hotspotQr.stage = HotspotQrStage::kHidden;
   if (screen.content != ScreenContent::kLiveFrame) releaseLiveFrame();
   if (screen.content == ScreenContent::kProgress) {
     batteryOverlay.visible = false;
@@ -1258,6 +1282,93 @@ void showButtonMessage(const char *message) {
   markScreenFill(TFT_BLACK);
 }
 
+void drawHotspotQrLabel(const char *text, int16_t y, uint8_t size) {
+  display.setTextSize(size);
+  display.drawString(text, display.width() / 2, y);
+}
+
+void drawHotspotQr() {
+  display.setRotation(0);
+  display.fillScreen(TFT_BLACK);
+  display.setTextColor(TFT_WHITE, TFT_BLACK);
+  display.setTextDatum(middle_center);
+  const int16_t qrSize = display.width() - 10;
+  const int16_t qrX = (display.width() - qrSize) / 2;
+  const int16_t qrY = (display.height() - qrSize) / 2;
+  const int16_t topLabelY = qrY - 24;
+  const int16_t bottomLabelY = qrY + qrSize + 20;
+
+  switch (hotspotQr.stage) {
+    case HotspotQrStage::kWaiting:
+      drawHotspotQrLabel("Hotspot on", display.height() / 2 - 12, 2);
+      drawHotspotQrLabel("Starting...", display.height() / 2 + 14, 1);
+      break;
+    case HotspotQrStage::kJoin: {
+      // Long enough for an escaped 32-byte SSID and 63-byte password.
+      char payload[7 + 2 * kWifiMaxSsidLength + 9 +
+                   2 * kHotspotMaxPasswordLength + 3];
+      if (!wifiManager.formatHotspotJoinQr(payload, sizeof(payload))) {
+        drawHotspotQrLabel("Set AP password", display.height() / 2, 2);
+        break;
+      }
+      drawHotspotQrLabel("Scan to join", topLabelY, 2);
+      display.qrcode(payload, qrX, qrY, qrSize, 1, /*margin=*/true);
+      // Wipe the password from the stack once it is drawn.
+      memset(payload, 0, sizeof(payload));
+      drawHotspotQrLabel(wifiManager.hotspotStatus().ssid, bottomLabelY, 1);
+      break;
+    }
+    case HotspotQrStage::kOpenPage:
+      drawHotspotQrLabel("Scan to open", topLabelY, 2);
+      display.qrcode(kHotspotPageUrl, qrX, qrY, qrSize, 1, /*margin=*/true);
+      drawHotspotQrLabel("192.168.4.1", bottomLabelY, 1);
+      break;
+    case HotspotQrStage::kHidden:
+      break;
+  }
+  display.setTextDatum(top_left);
+  display.setTextSize(1);
+  drawOverlays();
+}
+
+void showHotspotQr(HotspotQrStage stage) {
+  if (!hotspotQr.visible()) hotspotQr.rotation = display.getRotation();
+  hotspotQr.stage = stage;
+  hotspotQr.stageAt = millis();
+  drawHotspotQr();
+}
+
+void hideHotspotQr() {
+  if (!hotspotQr.visible()) return;
+  hotspotQr.stage = HotspotQrStage::kHidden;
+  display.setRotation(hotspotQr.rotation);
+  restoreUnderOverlay(0, 0, display.width(), display.height(),
+                      hotspotQr.rotation);
+}
+
+// Turns the hotspot back off (it stops once no phone is mid-upload) and
+// returns to what the screen showed before the QR codes.
+void cancelHotspotFromQr() {
+  wifiManager.turnOffHotspot();
+  hideHotspotQr();
+}
+
+void pollHotspotQr() {
+  if (!hotspotQr.visible()) return;
+  const uint32_t now = millis();
+  // Someone is setting up a phone: keep WiFi from being idled off.
+  power.lastActivityAt = now;
+  const HotspotQrStage next = nextHotspotQrStage(
+      hotspotQr.stage, now - hotspotQr.stageAt,
+      wifiManager.hotspotStatus().running, wifiManager.hotspotStationCount());
+  if (next == hotspotQr.stage) return;
+  if (next == HotspotQrStage::kHidden) {
+    hideHotspotQr();
+  } else {
+    showHotspotQr(next);
+  }
+}
+
 void showHotspotButtonFeedback(uint8_t previousMode) {
   const HotspotStatus status = wifiManager.hotspotStatus();
   if (status.mode != previousMode) {
@@ -1293,7 +1404,16 @@ void pollButton(gpio_num_t pin, ButtonState &button) {
     } else {
       const uint8_t previousMode = wifiManager.hotspotStatus().mode;
       wifiManager.toggleHotspotMode();
-      showHotspotButtonFeedback(previousMode);
+      const HotspotStatus status = wifiManager.hotspotStatus();
+      if (status.mode != previousMode && status.mode != HOTSPOT_OFF) {
+        // Turned on: show how to join (a fallback hotspot may still be
+        // waiting for the home network to give up).
+        noteActivity();
+        showHotspotQr(status.running ? HotspotQrStage::kJoin
+                                     : HotspotQrStage::kWaiting);
+      } else {
+        showHotspotButtonFeedback(previousMode);
+      }
     }
     button.longHandled = true;
     return;
@@ -2659,6 +2779,16 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
       else sendHotspotStatus(sequence);
       return;
 
+    case TURN_OFF_HOTSPOT:
+      if (length != 0) {
+        sendNack(sequence, command, INVALID_PAYLOAD);
+      } else {
+        // Reply first: this may be the hotspot page's own connection.
+        sendAck(sequence, command);
+        cancelHotspotFromQr();
+      }
+      return;
+
     default:
       sendNack(sequence, command, UNSUPPORTED_COMMAND);
   }
@@ -2885,6 +3015,7 @@ void loop() {
   pollBatteryOverlay();
   pollItemHint();
   pollNowPlaying();
+  pollHotspotQr();
   updatePowerMode();
 
   // Sleeping lets the idle task halt the CPU between passes instead of

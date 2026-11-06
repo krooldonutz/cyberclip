@@ -20,9 +20,12 @@ const ids = [
   'background-input', 'quality-input', 'quality-output', 'backlight-input',
   'backlight-output', 'gif-delay-input', 'loop-input', 'persist-input', 'retry-button',
   'activity-log', 'log-template', 'library-refresh-button', 'library-usage-label',
-  'library-count', 'library-usage', 'library-empty', 'library-list',
+  'library-count', 'library-usage', 'library-empty', 'library-list', 'disconnect-button',
 ];
 const elements = Object.fromEntries(ids.map((id) => [id, document.getElementById(id)]));
+// Shows the Disconnect button, which turns off the board's hotspot (and so
+// this page's own connection). Off for now; the firmware command stays.
+const SHOW_DISCONNECT_BUTTON = false;
 const DEFAULT_CAPABILITIES = {
   width: 170,
   height: 320,
@@ -90,6 +93,10 @@ function initialize() {
 
 function bindEvents() {
   elements['retry-button'].addEventListener('click', connect);
+  elements['disconnect-button'].hidden = !SHOW_DISCONNECT_BUTTON;
+  if (SHOW_DISCONNECT_BUTTON) {
+    elements['disconnect-button'].addEventListener('click', disconnectAndTurnOffHotspot);
+  }
   elements['media-input'].addEventListener('change', handleMediaSelection);
   elements['display-button'].addEventListener('click', displayImage);
   elements['play-button'].addEventListener('click', playGif);
@@ -123,6 +130,25 @@ async function connect() {
     setProgress(0, 'Reconnect to the Cyberclip Wi-Fi and try again');
     setState('disconnected');
   }
+}
+
+// The board's hotspot is this page's only link, so turning it off ends the
+// session; holding BOOT on the board turns it back on.
+async function disconnectAndTurnOffHotspot() {
+  if (!globalThis.confirm(
+    'Disconnect and turn off the Cyberclip Wi-Fi? Hold BOOT on the board to turn it back on.',
+  )) return;
+  stopOperation();
+  try {
+    await transport.request(Command.TURN_OFF_HOTSPOT, new Uint8Array());
+    log('Wi-Fi turned off. Hold BOOT on the board to turn it back on.');
+  } catch (error) {
+    log(`Could not turn off Wi-Fi: ${error.message}`, 'error');
+    return;
+  }
+  await transport.disconnect().catch(() => {});
+  setProgress(0, 'Wi-Fi off · hold BOOT on the board to turn it back on');
+  setState('disconnected');
 }
 
 async function handleMediaSelection(event) {
@@ -381,6 +407,7 @@ function setState(nextState) {
   elements['clear-button'].disabled = !ready;
   elements['remove-stored-button'].disabled = !ready || !capabilities.persistentStorage;
   elements['retry-button'].disabled = busy || nextState === 'connecting' || nextState === 'handshaking';
+  elements['disconnect-button'].disabled = !ready;
   const online = transport.connected && nextState !== 'disconnected';
   elements['connection-pill'].className = `pill ${online ? 'pill-online' : 'pill-offline'}`;
   elements['connection-pill'].textContent = {
