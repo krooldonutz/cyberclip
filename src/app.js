@@ -25,6 +25,7 @@ import {
   WifiState,
 } from './protocol.js';
 import { SerialTransport } from './serial.js';
+import { StoredMediaView, uploadErrorHint } from './storedMedia.js';
 import { WifiTransport } from './wifiTransport.js';
 
 const DEFAULT_CAPABILITIES = {
@@ -87,6 +88,12 @@ const elements = Object.fromEntries([
   'loop-input',
   'persist-input',
   'clear-log-button',
+  'library-refresh-button',
+  'library-usage-label',
+  'library-count',
+  'library-usage',
+  'library-empty',
+  'library-list',
   'activity-log',
   'log-template',
 ].map((id) => [id, document.getElementById(id)]));
@@ -120,6 +127,8 @@ function handleTransportStateChange(nextState, details) {
   if (['connecting', 'handshaking', 'ready', 'disconnecting', 'disconnected'].includes(nextState)) {
     setState(nextState);
   }
+  if (nextState === 'ready') void storedMediaView.refresh();
+  if (nextState === 'disconnected') storedMediaView.reset();
 }
 
 function handleTransportProtocolError(error) {
@@ -135,6 +144,19 @@ const wifiTransport = new WifiTransport({
   onProtocolError: handleTransportProtocolError,
 });
 let activeTransport = serialTransport;
+const storedMediaView = new StoredMediaView({
+  elements: {
+    list: elements['library-list'],
+    empty: elements['library-empty'],
+    usageLabel: elements['library-usage-label'],
+    usageBar: elements['library-usage'],
+    count: elements['library-count'],
+    refreshButton: elements['library-refresh-button'],
+  },
+  getTransport: () => activeTransport,
+  canUseDevice: () => state === 'ready',
+  log,
+});
 
 initialize();
 
@@ -572,8 +594,8 @@ async function displayImage() {
   if (!selectedFile || selectedFile.type === 'image/gif') return;
   const controller = new AbortController();
   playbackController = controller;
+  const persist = shouldPersist();
   try {
-    const persist = shouldPersist();
     setState('processing');
     setProgress(0, 'Encoding image');
     const prepared = await prepareImageFile(selectedFile, imageOptions());
@@ -590,10 +612,11 @@ async function displayImage() {
     setProgress(100, persist ? 'Saved on device' : 'Displayed');
   } catch (error) {
     await cancelPersistentUpload();
-    if (error.name !== 'AbortError') log(`Display failed: ${error.message}`, 'error');
+    if (error.name !== 'AbortError') logUploadFailure('Display failed', error);
   } finally {
     playbackController = null;
     setState(activeTransport.connected ? 'ready' : 'disconnected');
+    if (persist) void storedMediaView.refresh();
   }
 }
 
@@ -659,10 +682,11 @@ async function playGif() {
     setProgress(100, persist ? 'Saved and playing on device' : 'Playback complete');
   } catch (error) {
     await cancelPersistentUpload();
-    if (error.name !== 'AbortError') log(`GIF playback failed: ${error.message}`, 'error');
+    if (error.name !== 'AbortError') logUploadFailure('GIF playback failed', error);
   } finally {
     playbackController = null;
     setState(activeTransport.connected ? 'ready' : 'disconnected');
+    if (persist) void storedMediaView.refresh();
   }
 }
 
@@ -773,13 +797,21 @@ async function clearDisplay() {
 }
 
 async function removeStoredMedia() {
+  if (!globalThis.confirm('Delete everything saved on the device? This cannot be undone.')) return;
   try {
-    await activeTransport.request(Command.CLEAR_STORED, new Uint8Array(), { timeoutMs: 12000 });
+    await activeTransport.request(Command.CLEAR_STORED, new Uint8Array(), { timeoutMs: 30000 });
     await activeTransport.request(Command.CLEAR_DISPLAY, createClearPayload(0));
-    log('Saved media removed');
+    log('All saved media deleted');
   } catch (error) {
-    log(`Could not remove saved media: ${error.message}`, 'error');
+    log(`Could not delete saved media: ${error.message}`, 'error');
   }
+  void storedMediaView.refresh();
+}
+
+function logUploadFailure(prefix, error) {
+  log(`${prefix}: ${error.message}`, 'error');
+  const hint = uploadErrorHint(error);
+  if (hint) log(hint, 'error');
 }
 
 function shouldPersist() {
@@ -823,6 +855,7 @@ function setState(nextState) {
   const online = connected && !['disconnecting', 'disconnected'].includes(nextState);
   elements['connection-pill'].className = `pill ${online ? 'pill-online' : 'pill-offline'}`;
   elements['connection-pill'].textContent = stateLabel(nextState);
+  storedMediaView.updateButtons();
 }
 
 function updateDeviceDetails() {

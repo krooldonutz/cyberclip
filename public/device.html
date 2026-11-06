@@ -43,7 +43,7 @@
             <button id="play-button" class="button button-primary" disabled>Play GIF</button>
             <button id="stop-button" class="button button-danger" disabled>Stop</button>
             <button id="clear-button" class="button button-secondary" disabled>Clear screen</button>
-            <button id="remove-stored-button" class="button button-secondary" disabled>Remove saved media</button>
+            <button id="remove-stored-button" class="button button-secondary" disabled>Delete all saved media</button>
           </div>
           <div class="progress-block">
             <div class="progress-label">
@@ -93,6 +93,25 @@
           <label class="checkbox-label"><input id="loop-input" type="checkbox" checked>Loop animation</label>
           <label class="checkbox-label"><input id="persist-input" type="checkbox" checked disabled>Keep media on device</label>
         </aside>
+      </section>
+
+      <section class="panel library-panel" aria-labelledby="library-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">On the device</p>
+            <h2 id="library-heading">Saved media</h2>
+          </div>
+          <button id="library-refresh-button" class="button button-quiet" disabled>Refresh</button>
+        </div>
+        <div class="library-usage">
+          <div class="progress-label">
+            <span id="library-usage-label">Not connected</span>
+            <span id="library-count"></span>
+          </div>
+          <progress id="library-usage" value="0" max="100" aria-labelledby="library-usage-label"></progress>
+        </div>
+        <p id="library-empty" class="device-help library-empty" aria-live="polite"></p>
+        <ul id="library-list" class="library-list"></ul>
       </section>
 
       <section class="panel activity-panel">

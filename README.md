@@ -40,11 +40,16 @@ A short press of the **BOOT** (GPIO0) button enters deep sleep, holding it for
 board is not detected for flashing, hold **BOOT**, press **RST**, then release
 **BOOT** to enter download mode.
 
-Pressing the second user button (GPIO14) shows a battery indicator in the
-top-right corner, on top of whatever is on screen. It shows a three-bar battery
-(red = low, yellow = medium, green = high) and the estimated percentage. The
-indicator stays up while the button is held and disappears 3 seconds after the
-button is released. The percentage is estimated from the battery voltage, which
+Tapping the second user button (GPIO14) shows the next saved image or GIF
+(see [Saved media](#saved-media)), going back to the first after the last. A
+short **2 of 3** label in the top-left corner says which saved item is on
+screen. With only one item saved, a tap shows it again.
+
+Holding the second button for half a second shows a battery indicator in the
+top-right corner instead, on top of whatever is on screen. It shows a
+three-bar battery (red = low, yellow = medium, green = high) and the estimated
+percentage. The indicator stays up while the button is held and disappears 3
+seconds after the button is released. The percentage is estimated from the battery voltage, which
 the board reads on GPIO4 through a 2:1 divider. The charge state is not wired
 to a GPIO, so when USB power is present the indicator shows **USB** instead of
 a percentage.
@@ -232,6 +237,12 @@ Source GIF timing is preserved per frame at the format's 10 ms resolution unless
 
 Persisted images and GIFs survive reset and power loss. The board still needs power: disconnecting USB also turns the display off unless the ESP32 is powered from another suitable source.
 
+### Saved media
+
+The board keeps up to 16 saved images and GIFs, limited by its media storage (about 9 MB of flash). Each upload with **Keep media on device** turned on is added as a new item and shown straight away; it never replaces an item already saved. The **Saved media** panel, in the desktop app and on the hotspot page, shows how much space is used, a preview of each item, and which one is on screen. **Show** puts an item on screen (it is also the one shown after a restart) and **Delete** removes one item. Deleting the item on screen moves on to the next saved item. **Delete all saved media** removes everything.
+
+When the device is full, an upload stops with "The device is full" and the items already saved are kept; delete something under **Saved media** and send it again. Earlier firmware kept a single saved item; the first start of firmware with the library moves it into the library. Older firmware cannot read the library, so installing an older version afterwards shows nothing saved until media is sent again.
+
 Press the board's **BOOT** button during normal operation to enter deep sleep and turn off the display. Press **BOOT** again to wake the board and resume persisted media. Deep sleep minimizes consumption but does not physically disconnect power. The **EN/RESET** button remains a hardware reset, and holding BOOT while resetting or connecting power still enters the ESP32 firmware-download mode.
 
 The normal 160 MHz CPU and WiFi modem-sleep settings keep USB, WiFi, and stored
@@ -249,7 +260,7 @@ magic "CC" | version u8 | command u8 | sequence u16 |
 payload length u32 | payload | CRC-16/CCITT-FALSE u16
 ```
 
-The CRC covers bytes from `version` through the end of `payload`. Frames are transferred with begin, contiguous chunk, and commit commands. The ESP32 only draws a JPEG after the complete frame has passed length, sequence, CRC, dimension, and decode validation. Playlist commands stage one image or up to 255 GIF frames in the inactive flash generation, then atomically activate it so an interrupted upload does not destroy the previously saved media.
+The CRC covers bytes from `version` through the end of `payload`. Frames are transferred with begin, contiguous chunk, and commit commands. The ESP32 only draws a JPEG after the complete frame has passed length, sequence, CRC, dimension, and decode validation. Playlist commands stage one image or up to 255 GIF frames in a free library slot, then atomically add it (by renaming its metadata into place), so an interrupted upload never touches the items already saved. `LIST_STORED`, `SELECT_STORED`, `DELETE_STORED` and `READ_STORED_FRAME` list, show, delete and preview saved items; see `firmware/protocol.h` for their layouts.
 
 The handshake reports:
 
@@ -281,7 +292,7 @@ Connect to the board over USB and configure **Device hotspot** in the desktop ap
 - **Automatic fallback** starts it when home WiFi is not configured or cannot connect, and stops it after home WiFi recovers.
 - **Always on** keeps the hotspot available while the board may also remain connected to home WiFi.
 
-When the hotspot is running, join the displayed `Cyberclip-......` network from a phone and open `http://192.168.4.1`. The hosted page supports image/GIF selection, exact preview and JPEG processing, fit, rotation, background, quality, backlight, timing, looping, persistence, clearing, and removing stored media. It intentionally contains no firmware installer or network setup controls.
+When the hotspot is running, join the displayed `Cyberclip-......` network from a phone and open `http://192.168.4.1`. The hosted page supports image/GIF selection, exact preview and JPEG processing, fit, rotation, background, quality, backlight, timing, looping, persistence, clearing, and the **Saved media** panel. It intentionally contains no firmware installer or network setup controls.
 
 The hotspot's WPA2 password is the access boundary for its self-hosted page. A WebSocket is accepted without the LAN pairing token only when the firmware observes that it arrived through the AP interface. Home-network WebSockets still require the random token issued during USB pairing. The password is stored on the device and is never returned to either web UI.
 

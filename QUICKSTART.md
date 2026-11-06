@@ -49,7 +49,7 @@ The phone performs image resizing, GIF compositing, JPEG encoding, and transfer 
 
 A short BOOT press keeps the existing sleep/wake behavior. Hold BOOT for about two seconds to switch the hotspot between **Off** and its last enabled mode.
 
-Leave **Keep media on device** enabled to store the result in onboard flash. A saved image is restored after restart; a saved GIF plays from the ESP32 without the browser or USB data connection. GIFs are limited to 255 frames. **Stop** cancels playback and any incomplete transfer, while **Remove saved media** erases the persistent copy.
+Leave **Keep media on device** enabled to store the result in onboard flash. A saved image is restored after restart; a saved GIF plays from the ESP32 without the browser or USB data connection. GIFs are limited to 255 frames. Each saved upload is added to the **Saved media** panel (up to 16 items), where you can show or delete items. **Stop** cancels playback and any incomplete transfer, while **Delete all saved media** erases everything saved.
 
 The ESP32 must remain powered. If USB is its only power source, unplugging USB turns the board and display off.
 

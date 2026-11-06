@@ -54,6 +54,111 @@ void test_protocol_v2_playlist_metadata_integrity() {
   TEST_ASSERT_FALSE(validatePlaylistMetadata(metadata, sizeof(metadata)));
 }
 
+void test_stored_item_metadata_integrity() {
+  uint8_t metadata[storedItemMetadataSize(2)] = {
+      'C', 'C', 'M', 'I', kStoredItemMetadataVersion, 7, MEDIA_GIF, 2, 1, 1};
+  writeLe32(metadata + 10, 54321);
+  writeLe32(metadata + 14, 0xCAFEF00D);
+  writeLe16(metadata + kStoredItemMetadataHeaderSize, 40);
+  writeLe16(metadata + kStoredItemMetadataHeaderSize + 2, 90);
+  writeLe16(metadata + sizeof(metadata) - kPlaylistMetadataCrcSize,
+            crc16CcittFalse(metadata,
+                            sizeof(metadata) - kPlaylistMetadataCrcSize));
+
+  TEST_ASSERT_EQUAL_UINT32(24, sizeof(metadata));
+  TEST_ASSERT_TRUE(validateStoredItemMetadata(metadata, sizeof(metadata), 7));
+  // Metadata moved to another slot's file is rejected.
+  TEST_ASSERT_FALSE(validateStoredItemMetadata(metadata, sizeof(metadata), 6));
+  TEST_ASSERT_FALSE(
+      validateStoredItemMetadata(metadata, sizeof(metadata) - 1, 7));
+  metadata[12] ^= 1;
+  TEST_ASSERT_FALSE(validateStoredItemMetadata(metadata, sizeof(metadata), 7));
+}
+
+void test_stored_item_paths_and_slots() {
+  char path[kStoredPathSize];
+  storedFramePath(path, sizeof(path), 15, 254);
+  TEST_ASSERT_EQUAL_STRING("/s15f254.jpg", path);
+  storedFramePath(path, sizeof(path), 0, 0);
+  TEST_ASSERT_EQUAL_STRING("/s00f000.jpg", path);
+  storedMetadataPath(path, sizeof(path), 3, false);
+  TEST_ASSERT_EQUAL_STRING("/s03.meta", path);
+  storedMetadataPath(path, sizeof(path), 3, true);
+  TEST_ASSERT_EQUAL_STRING("/s03.tmp", path);
+
+  TEST_ASSERT_EQUAL_UINT8(15, storedFileSlot("/s15f254.jpg"));
+  TEST_ASSERT_EQUAL_UINT8(3, storedFileSlot("s03.meta"));
+  TEST_ASSERT_EQUAL_UINT8(3, storedFileSlot("s03.tmp"));
+  TEST_ASSERT_EQUAL_UINT8(kNoStoredSlot, storedFileSlot("s16.meta"));
+  TEST_ASSERT_EQUAL_UINT8(kNoStoredSlot, storedFileSlot("s03.metax"));
+  TEST_ASSERT_EQUAL_UINT8(kNoStoredSlot, storedFileSlot("s3f001.jpg"));
+  TEST_ASSERT_EQUAL_UINT8(kNoStoredSlot, storedFileSlot("active"));
+  TEST_ASSERT_EQUAL_UINT8(kNoStoredSlot, storedFileSlot("a001.jpg"));
+  TEST_ASSERT_EQUAL_UINT8(kNoStoredSlot, storedFileSlot(nullptr));
+
+  TEST_ASSERT_TRUE(isLegacyFrameName("/a000.jpg"));
+  TEST_ASSERT_TRUE(isLegacyFrameName("b254.jpg"));
+  TEST_ASSERT_FALSE(isLegacyFrameName("c000.jpg"));
+  TEST_ASSERT_FALSE(isLegacyFrameName("playlist.meta"));
+  TEST_ASSERT_FALSE(isLegacyFrameName("s00f000.jpg"));
+}
+
+void test_stored_slot_selection() {
+  bool used[kMaxStoredItems] = {};
+  TEST_ASSERT_EQUAL_UINT8(0, firstFreeStoredSlot(used));
+  TEST_ASSERT_EQUAL_UINT8(kNoStoredSlot, firstUsedStoredSlot(used));
+  TEST_ASSERT_EQUAL_UINT8(kNoStoredSlot, nextStoredSlot(used, 4));
+
+  used[0] = used[1] = used[5] = true;
+  TEST_ASSERT_EQUAL_UINT8(2, firstFreeStoredSlot(used));
+  TEST_ASSERT_EQUAL_UINT8(0, firstUsedStoredSlot(used));
+  TEST_ASSERT_EQUAL_UINT8(5, nextStoredSlot(used, 1));
+  // Wraps around, and never returns the slot it started from.
+  TEST_ASSERT_EQUAL_UINT8(0, nextStoredSlot(used, 5));
+  used[0] = used[1] = false;
+  TEST_ASSERT_EQUAL_UINT8(kNoStoredSlot, nextStoredSlot(used, 5));
+
+  for (bool &slot : used) slot = true;
+  TEST_ASSERT_EQUAL_UINT8(kNoStoredSlot, firstFreeStoredSlot(used));
+  TEST_ASSERT_EQUAL_UINT8(0, nextStoredSlot(used, kMaxStoredItems - 1));
+}
+
+void test_stored_item_position() {
+  bool used[kMaxStoredItems] = {};
+  uint8_t position = 9;
+  uint8_t count = 9;
+  TEST_ASSERT_FALSE(storedItemPosition(used, 0, &position, &count));
+  TEST_ASSERT_EQUAL_UINT8(0, count);
+
+  used[1] = used[4] = used[9] = true;
+  TEST_ASSERT_TRUE(storedItemPosition(used, 4, &position, &count));
+  TEST_ASSERT_EQUAL_UINT8(2, position);
+  TEST_ASSERT_EQUAL_UINT8(3, count);
+  TEST_ASSERT_TRUE(storedItemPosition(used, 9, &position, &count));
+  TEST_ASSERT_EQUAL_UINT8(3, position);
+  TEST_ASSERT_FALSE(storedItemPosition(used, 2, &position, &count));
+}
+
+void test_battery_button_hold() {
+  TEST_ASSERT_FALSE(isBatteryButtonHeld(1000, 1000));
+  TEST_ASSERT_FALSE(isBatteryButtonHeld(1000, 1499));
+  TEST_ASSERT_TRUE(isBatteryButtonHeld(1000, 1500));
+  // millis() wrapping around does not turn a tap into a hold.
+  TEST_ASSERT_FALSE(isBatteryButtonHeld(UINT32_MAX - 100, 200));
+  TEST_ASSERT_TRUE(isBatteryButtonHeld(UINT32_MAX - 100, 450));
+}
+
+void test_stored_media_command_bytes() {
+  TEST_ASSERT_EQUAL_HEX8(0x34, LIST_STORED);
+  TEST_ASSERT_EQUAL_HEX8(0x35, SELECT_STORED);
+  TEST_ASSERT_EQUAL_HEX8(0x36, DELETE_STORED);
+  TEST_ASSERT_EQUAL_HEX8(0x37, READ_STORED_FRAME);
+  TEST_ASSERT_EQUAL_HEX8(0xA5, STORED_LIST_RESPONSE);
+  TEST_ASSERT_EQUAL_HEX8(0xA6, STORED_FRAME_RESPONSE);
+  TEST_ASSERT_EQUAL_UINT8(11, STORAGE_FULL);
+  TEST_ASSERT_EQUAL_UINT16(4085, kMaxStoredFrameReadData);
+}
+
 void test_wifi_command_bytes_do_not_collide() {
   TEST_ASSERT_EQUAL_HEX8(0x40, SET_WIFI_CREDENTIALS);
   TEST_ASSERT_EQUAL_HEX8(0x41, GET_WIFI_STATUS);
@@ -313,6 +418,12 @@ void runTests() {
   RUN_TEST(test_little_endian_helpers);
   RUN_TEST(test_upload_progress_pixels);
   RUN_TEST(test_protocol_v2_playlist_metadata_integrity);
+  RUN_TEST(test_stored_item_metadata_integrity);
+  RUN_TEST(test_stored_item_paths_and_slots);
+  RUN_TEST(test_stored_slot_selection);
+  RUN_TEST(test_stored_media_command_bytes);
+  RUN_TEST(test_stored_item_position);
+  RUN_TEST(test_battery_button_hold);
   RUN_TEST(test_wifi_command_bytes_do_not_collide);
   RUN_TEST(test_hotspot_validation_and_fallback_policy);
   RUN_TEST(test_power_policy);
