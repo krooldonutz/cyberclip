@@ -4,6 +4,12 @@
   color: #e5e7eb;
   background: #0b1020;
   font-synthesis: none;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+html {
+  overflow-x: hidden;
 }
 
 * {
@@ -12,7 +18,7 @@
 
 body {
   margin: 0;
-  min-width: 320px;
+  overflow-x: hidden;
   min-height: 100vh;
   background:
     radial-gradient(circle at 10% -10%, rgba(34, 211, 238, 0.15), transparent 36rem),
@@ -89,6 +95,7 @@ h2 {
 
 .layout {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   max-width: 1280px;
   margin: 0 auto;
@@ -434,7 +441,8 @@ progress::-webkit-progress-value {
 
 .log-entry {
   display: grid;
-  grid-template-columns: 82px 1fr;
+  grid-template-columns: 82px minmax(0, 1fr);
+  overflow-wrap: anywhere;
   gap: 10px;
   padding: 7px 0;
   border-bottom: 1px solid rgba(148, 163, 184, 0.08);
@@ -454,7 +462,7 @@ progress::-webkit-progress-value {
 
 .library-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(250px, 100%), 1fr));
   gap: 12px;
   margin: 16px 0 0;
   padding: 0;
@@ -523,7 +531,7 @@ progress::-webkit-progress-value {
 
 @media (max-width: 900px) {
   .workspace {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .device-details {
@@ -532,24 +540,103 @@ progress::-webkit-progress-value {
 
   .settings-panel {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 620px) {
-  .topbar,
-  .section-heading {
-    align-items: flex-start;
-    flex-direction: column;
+  .topbar {
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 18px 14px 12px;
   }
 
-  .device-details,
+  .topbar .button-row,
+  .topbar .header-actions {
+    flex-wrap: wrap;
+  }
+
+  h1 {
+    font-size: 1.75rem;
+  }
+
+  h2 {
+    font-size: 1.05rem;
+  }
+
+  .layout {
+    gap: 12px;
+    padding: 0 10px 24px;
+  }
+
+  .panel {
+    padding: 14px;
+    border-radius: 16px;
+  }
+
+  .section-heading {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .button-row {
+    flex-wrap: wrap;
+  }
+
+  .device-details {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
   .settings-panel {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-panel {
+    gap: 14px;
   }
 
   .preview-stage {
-    min-height: 330px;
+    min-height: 220px;
+    margin: 14px 0;
+  }
+
+  .preview-stage img {
+    max-height: 300px;
+  }
+
+  .preview-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 16px;
+    font-size: 1.15rem;
+  }
+
+  .file-picker {
+    padding: 12px;
+  }
+
+  .file-picker input {
+    max-width: 100%;
+  }
+
+  .transfer-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .transfer-actions .button {
+    padding: 9px 10px;
+  }
+
+  .transfer-actions .button:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .log-entry {
+    grid-template-columns: 64px minmax(0, 1fr);
+    gap: 8px;
   }
 
   .hotspot-controls {
