@@ -5,7 +5,7 @@ Usage (from the repository root):
   python scripts/device.py ports
   python scripts/device.py [--port COM8] hello
   python scripts/device.py [--port COM8] status
-  python scripts/device.py [--port COM8] wifi
+  python scripts/device.py [--port COM8] hotspot
   python scripts/device.py [--port COM8] backlight <0-255>
   python scripts/device.py [--port COM8] watch [--interval 10] [--duration 600] [--csv log.csv]
   python scripts/device.py [--port COM8] flash
@@ -16,7 +16,7 @@ Needs pyserial. PlatformIO's own Python has it:
 Speaks the same framed protocol as the web app (firmware/protocol.h): magic
 "CC", version, command, sequence u16, length u32, payload, CRC-16/CCITT-FALSE.
 Only read-only commands and the backlight are exposed; nothing here clears
-stored media or WiFi settings.
+stored media or hotspot settings.
 """
 
 import argparse
@@ -40,10 +40,9 @@ ESPRESSIF_VID = 0x303A
 PROTOCOL_VERSION = 2
 BAUD = 921600
 
-HELLO, SET_BACKLIGHT, GET_STATUS, GET_WIFI_STATUS = 0x01, 0x20, 0x22, 0x41
-HELLO_RESPONSE, STATUS_RESPONSE, WIFI_STATUS_RESPONSE = 0x81, 0xA2, 0xA3
+HELLO, SET_BACKLIGHT, GET_STATUS, GET_HOTSPOT_STATUS = 0x01, 0x20, 0x22, 0x45
+HELLO_RESPONSE, STATUS_RESPONSE, HOTSPOT_STATUS_RESPONSE = 0x81, 0xA2, 0xA4
 ACK, NACK = 0xF0, 0xF1
-WIFI_STATES = {0: 'off', 1: 'connecting', 2: 'connected', 3: 'failed'}
 
 
 def crc16(data, crc=0xFFFF):
@@ -144,13 +143,13 @@ def status(device):
     return result
 
 
-def wifi(device):
-    data = device.request(GET_WIFI_STATUS, expected=WIFI_STATUS_RESPONSE)
-    hostname_length = data[5]
+def hotspot(device):
+    data = device.request(GET_HOTSPOT_STATUS, expected=HOTSPOT_STATUS_RESPONSE)
     return {
-        'state': WIFI_STATES.get(data[0], data[0]),
-        'ip': '.'.join(str(b) for b in data[1:5]),
-        'hostname': data[6:6 + hostname_length].decode('utf-8', 'replace'),
+        'setting': 'off' if data[0] == 0 else 'on',
+        'running': bool(data[1]),
+        'ip': '.'.join(str(b) for b in data[3:7]),
+        'ssid': data[8:8 + data[7]].decode('utf-8', 'replace'),
     }
 
 
@@ -268,7 +267,7 @@ def main():
     commands.add_parser('ports', help='list serial ports')
     commands.add_parser('hello', help='firmware version and display info')
     commands.add_parser('status', help='battery, CPU clock, heap, uptime')
-    commands.add_parser('wifi', help='WiFi state and address')
+    commands.add_parser('hotspot', help='hotspot setting, state and network name')
     backlight = commands.add_parser('backlight', help='set backlight 0-255')
     backlight.add_argument('level', type=int)
     watcher = commands.add_parser('watch', help='poll status repeatedly')
@@ -303,8 +302,8 @@ def main():
             print_dict(hello(device))
         elif args.command == 'status':
             print_dict(status(device))
-        elif args.command == 'wifi':
-            print_dict(wifi(device))
+        elif args.command == 'hotspot':
+            print_dict(hotspot(device))
         elif args.command == 'backlight':
             if not 0 <= args.level <= 255:
                 sys.exit('backlight must be 0-255')

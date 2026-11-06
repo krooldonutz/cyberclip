@@ -3,16 +3,13 @@ import {
   Command,
   PacketDecoder,
   PROTOCOL_VERSION,
-  WifiState,
   HotspotMode,
   createBeginFramePayload,
   createBeginPlaylistPayload,
-  createWifiCredentialsPayload,
   createHotspotConfigPayload,
   crc16Ccitt,
   encodePacket,
   parseHelloResponse,
-  parseWifiStatusResponse,
   parseHotspotStatusResponse,
 } from './protocol.js';
 
@@ -129,99 +126,34 @@ describe('persistent media payloads', () => {
   });
 });
 
-describe('WiFi payloads', () => {
-  it('length-prefixes the SSID and password', () => {
-    const payload = createWifiCredentialsPayload({ ssid: 'Home', password: 'sw0rdfish' });
-    expect(payload).toEqual(Uint8Array.of(
-      4, ...new TextEncoder().encode('Home'),
-      9, ...new TextEncoder().encode('sw0rdfish'),
-    ));
+describe('hotspot payloads', () => {
+  it('encodes on or off as a single mode byte', () => {
+    expect(createHotspotConfigPayload({ on: true })).toEqual(Uint8Array.of(HotspotMode.ON));
+    expect(createHotspotConfigPayload({ on: false })).toEqual(Uint8Array.of(HotspotMode.OFF));
   });
 
-  describe('hotspot payloads', () => {
-    it('encodes mode and an optional WPA2 password', () => {
-      expect(createHotspotConfigPayload({
-        mode: HotspotMode.FALLBACK,
-        password: 'correct horse',
-      })).toEqual(Uint8Array.of(
-        HotspotMode.FALLBACK,
-        13,
-        ...new TextEncoder().encode('correct horse'),
-      ));
-      expect(createHotspotConfigPayload({
-        mode: HotspotMode.OFF,
-      })).toEqual(Uint8Array.of(HotspotMode.OFF, 0));
-    });
-
-    it('rejects invalid hotspot modes and WPA2 passwords', () => {
-      expect(() => createHotspotConfigPayload({ mode: 99 })).toThrow(/mode/);
-      expect(() => createHotspotConfigPayload({
-        mode: HotspotMode.ALWAYS,
-        password: 'short',
-      })).toThrow(/8-63/);
-    });
-
-    it('parses hotspot status without exposing the password', () => {
-      const ssid = new TextEncoder().encode('Cyberclip-A1B2C3');
-      expect(parseHotspotStatusResponse(Uint8Array.of(
-        HotspotMode.ALWAYS,
-        1,
-        1,
-        192, 168, 4, 1,
-        ssid.length,
-        ...ssid,
-      ))).toEqual({
-        mode: HotspotMode.ALWAYS,
-        running: true,
-        passwordConfigured: true,
-        ip: '192.168.4.1',
-        ssid: 'Cyberclip-A1B2C3',
-      });
+  it('parses hotspot status without exposing the password', () => {
+    const ssid = new TextEncoder().encode('Cyberclip-A1B2C3');
+    expect(parseHotspotStatusResponse(Uint8Array.of(
+      HotspotMode.ON,
+      1,
+      1,
+      192, 168, 4, 1,
+      ssid.length,
+      ...ssid,
+    ))).toEqual({
+      on: true,
+      running: true,
+      passwordConfigured: true,
+      ip: '192.168.4.1',
+      ssid: 'Cyberclip-A1B2C3',
     });
   });
 
-  it('accepts an empty password for open networks', () => {
-    expect(createWifiCredentialsPayload({ ssid: 'Home', password: '' })).toEqual(
-      Uint8Array.of(4, ...new TextEncoder().encode('Home'), 0),
-    );
-  });
-
-  it('rejects an empty or oversized SSID', () => {
-    expect(() => createWifiCredentialsPayload({ ssid: '', password: '' })).toThrow();
-    expect(() => createWifiCredentialsPayload({ ssid: 'x'.repeat(33), password: '' })).toThrow();
-  });
-
-  it('parses connection state, IP, hostname, and an optional token', () => {
-    const hostname = new TextEncoder().encode('cyberclip');
-    const token = Uint8Array.from({ length: 16 }, (_, i) => i);
-    const payload = new Uint8Array([
-      WifiState.CONNECTED, 192, 168, 1, 42,
-      hostname.length, ...hostname,
-      1, ...token,
-    ]);
-
-    expect(parseWifiStatusResponse(payload)).toMatchObject({
-      state: WifiState.CONNECTED,
-      connected: true,
-      ip: '192.168.1.42',
-      hostname: 'cyberclip',
-    });
-    expect(parseWifiStatusResponse(payload).token).toEqual(token);
-  });
-
-  it('omits the token when the device did not include one', () => {
-    const hostname = new TextEncoder().encode('cyberclip');
-    const payload = new Uint8Array([
-      WifiState.CONNECTING, 0, 0, 0, 0,
-      hostname.length, ...hostname,
-      0,
-    ]);
-
-    expect(parseWifiStatusResponse(payload)).toMatchObject({
-      state: WifiState.CONNECTING,
-      connected: false,
-      ip: '0.0.0.0',
-      token: null,
-    });
+  it('reads the fallback and always-on modes of older firmware as on', () => {
+    for (const mode of [1, 2]) {
+      expect(parseHotspotStatusResponse(Uint8Array.of(mode, 0, 1, 0, 0, 0, 0, 0)).on).toBe(true);
+    }
+    expect(parseHotspotStatusResponse(Uint8Array.of(0, 0, 1, 0, 0, 0, 0, 0)).on).toBe(false);
   });
 });

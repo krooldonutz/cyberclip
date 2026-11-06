@@ -124,7 +124,6 @@ async function connect() {
     if (transport.connected) await transport.disconnect();
     await transport.connect({
       host: globalThis.location.host || '192.168.4.1',
-      trustedDevicePage: true,
     });
   } catch (error) {
     log(`Connection failed: ${error.message}`, 'error');

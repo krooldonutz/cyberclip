@@ -7,12 +7,6 @@
 
 namespace cyberclip {
 
-struct WifiStatus {
-  uint8_t state = WIFI_OFF;
-  uint8_t ip[4] = {0, 0, 0, 0};
-  char hostname[33] = "cyberclip";
-};
-
 struct HotspotStatus {
   uint8_t mode = HOTSPOT_OFF;
   bool running = false;
@@ -21,62 +15,44 @@ struct HotspotStatus {
   char ssid[kWifiMaxSsidLength + 1] = {};
 };
 
-// Owns station and hotspot settings (NVS via Preferences) and their lifecycle.
+// Owns the board's hotspot: its on/off setting and WPA2 password (NVS via
+// Preferences) and its lifecycle. The board never joins another network.
+// The password is generated on first boot (or kept from older firmware that
+// let it be typed in) and reaches phones through the on-screen QR code.
 class WifiManager {
  public:
   void begin();
   void poll();
 
-  // Stores new credentials, enables WiFi, and starts connecting. Generates
-  // a pairing token on the first-ever call and reports it via *tokenOut*/
-  // *tokenIncluded* so the caller can echo it back over USB once. Returns
-  // false if the ssid/password are invalid.
-  bool setCredentials(const char *ssid, const char *password,
-                      uint8_t tokenOut[kWifiTokenSize], bool *tokenIncluded);
-  void clearCredentials();
-  void setEnabled(bool enabled);
-  bool setHotspotConfig(uint8_t mode, const char *password,
-                        size_t passwordLength);
+  // Returns false if *mode* is not a HotspotMode.
+  bool setHotspotMode(uint8_t mode);
   void toggleHotspotMode();
-  // Sets the hotspot mode to off, remembering the old mode for the next
-  // toggle. The hotspot itself stops once no phone is mid-upload.
+  // Turns the hotspot setting off. The hotspot itself stops once no phone
+  // is mid-upload.
   void turnOffHotspot();
 
-  // Turns the radio fully off (station and hotspot) without changing any
-  // stored settings; resume() brings back whatever those settings ask for.
+  // Turns the radio fully off without changing any stored settings;
+  // resume() brings back whatever those settings ask for.
   void suspend();
   void resume();
   bool suspended() const { return suspended_; }
 
-  WifiStatus status() const;
   HotspotStatus hotspotStatus() const;
   // Phones currently joined to the hotspot (0 while it is not running).
   uint8_t hotspotStationCount() const;
   // Writes the WIFI: QR text for joining the hotspot, which includes its
-  // password. Returns false when no password is set or it does not fit.
+  // password. Returns false if it does not fit.
   bool formatHotspotJoinQr(char *out, size_t outSize) const;
-  bool checkToken(const uint8_t *token, size_t length) const;
 
  private:
   void loadFromPreferences();
-  void generateToken();
-  void connectIfNeeded();
+  void ensureHotspotPassword();
   void startHotspot();
   void stopHotspotIfSafe();
   void persistHotspotMode();
 
-  bool enabled_ = false;
   bool suspended_ = false;
-  bool hasCredentials_ = false;
-  bool hasToken_ = false;
-  uint8_t token_[kWifiTokenSize] = {};
-  char ssid_[kWifiMaxSsidLength + 1] = {};
-  char password_[kWifiMaxPasswordLength + 1] = {};
-  WifiStatus status_;
-  uint32_t lastAttemptAt_ = 0;
-  uint32_t disconnectedAt_ = 0;
   uint8_t hotspotMode_ = HOTSPOT_OFF;
-  uint8_t lastEnabledHotspotMode_ = HOTSPOT_FALLBACK;
   bool hotspotRunning_ = false;
   bool dnsRunning_ = false;
   char hotspotPassword_[kHotspotMaxPasswordLength + 1] = {};

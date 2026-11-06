@@ -52,9 +52,9 @@ void handleClose(AsyncWebSocketClient *client) {
 void handleMessage(AsyncWebSocketClient *client, const uint8_t *data,
                    size_t length) {
   if (!activeClientAuthorized) {
-    if ((activeClientIsAp && length == 0) ||
-        (!activeClientIsAp && length == kWifiTokenSize &&
-         wifiManager.checkToken(data, length))) {
+    // The hosted page opens with an empty message. Anything else, or a
+    // client that did not arrive through the hotspot, is dropped.
+    if (activeClientIsAp && length == 0) {
       activeClientAuthorized = true;
     } else {
       handleClose(client);
@@ -142,8 +142,8 @@ void handleWsEvent(AsyncWebSocket *, AsyncWebSocketClient *client,
 }  // namespace
 
 void wsServerBegin() {
-  // Safe to call every time networking comes up. WifiManager first enables
-  // STA or AP so LWIP's tcpip task exists before this listener is started.
+  // Safe to call every time the hotspot comes up. WifiManager enables the
+  // AP first so LWIP's tcpip task exists before this listener is started.
   static bool started = false;
   if (started) return;
   started = true;

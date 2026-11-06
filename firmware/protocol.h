@@ -19,15 +19,14 @@ constexpr uint8_t kPlaylistMetadataVersion = 2;
 constexpr size_t kPlaylistMetadataHeaderSize = 10;
 constexpr size_t kPlaylistMetadataCrcSize = 2;
 
-// WiFi is an additional, optional, local-network-only transport alongside
-// USB serial (see firmware/src/wifi_manager.h and firmware/src/ws_server.h).
-// Credentials are provisioned once over USB; the pairing token this issues
-// gates the WebSocket control transport.
-constexpr size_t kWifiTokenSize = 16;
+// WiFi is the board's own hotspot only (see firmware/src/wifi_manager.h and
+// firmware/src/ws_server.h): phones join it by scanning the on-screen QR
+// code. The board never joins another network. Its WPA2 password is
+// generated on the device the first time it is needed.
 constexpr size_t kWifiMaxSsidLength = 32;
-constexpr size_t kWifiMaxPasswordLength = 64;
 constexpr size_t kHotspotMinPasswordLength = 8;
 constexpr size_t kHotspotMaxPasswordLength = 63;
+constexpr size_t kHotspotGeneratedPasswordLength = 12;
 
 enum Command : uint8_t {
   HELLO = 0x01,
@@ -57,16 +56,10 @@ enum Command : uint8_t {
   // Replies STORED_FRAME_RESPONSE with up to maxLength bytes of that frame's
   // stored JPEG, so the app can show what each item is.
   READ_STORED_FRAME = 0x37,
-  // SET_WIFI_CREDENTIALS: ssidLength u8, ssid bytes, passwordLength u8,
-  // password bytes. Sent over USB during one-time pairing.
-  SET_WIFI_CREDENTIALS = 0x40,
-  GET_WIFI_STATUS = 0x41,
-  CLEAR_WIFI_CREDENTIALS = 0x42,
-  SET_WIFI_ENABLED = 0x43,
-  // SET_HOTSPOT_CONFIG (USB only): mode u8, passwordLength u8, password bytes.
-  // mode is HotspotMode. A zero passwordLength retains the stored password;
-  // otherwise it must contain 8..63 WPA2 bytes. Enabling a mode without a
-  // stored password returns INVALID_PAYLOAD.
+  // 0x40-0x43 were the home WiFi commands (credentials, status, forget,
+  // enable), retired along with joining a home network. They now NACK with
+  // UNSUPPORTED_COMMAND; don't reuse them.
+  // SET_HOTSPOT_CONFIG (USB only): mode u8 (HotspotMode).
   SET_HOTSPOT_CONFIG = 0x44,
   GET_HOTSPOT_STATUS = 0x45,
   // TURN_OFF_HOTSPOT: no payload. Replies ACK, then sets the hotspot mode to
@@ -75,12 +68,10 @@ enum Command : uint8_t {
   TURN_OFF_HOTSPOT = 0x46,
   HELLO_RESPONSE = 0x81,
   STATUS_RESPONSE = 0xA2,
-  // WIFI_STATUS_RESPONSE: state u8, ipv4 4 bytes, hostnameLength u8,
-  // hostname bytes, tokenIncluded u8, token 16 bytes (only when
-  // tokenIncluded is 1, i.e. immediately after a first SET_WIFI_CREDENTIALS).
-  WIFI_STATUS_RESPONSE = 0xA3,
+  // 0xA3 was WIFI_STATUS_RESPONSE; don't reuse it.
   // HOTSPOT_STATUS_RESPONSE: configuredMode u8, running u8,
-  // passwordConfigured u8, AP IPv4 4 bytes, ssidLength u8, SSID bytes.
+  // passwordConfigured u8 (always 1 now that the board makes its own),
+  // AP IPv4 4 bytes, ssidLength u8, SSID bytes.
   // The AP address is 192.168.4.1 while running and 0.0.0.0 otherwise.
   HOTSPOT_STATUS_RESPONSE = 0xA4,
   // STORED_LIST_RESPONSE: totalBytes u32, usedBytes u32, maxItems u8,
@@ -95,21 +86,17 @@ enum Command : uint8_t {
   NACK = 0xF1,
 };
 
-enum WifiState : uint8_t {
-  WIFI_OFF = 0,
-  WIFI_CONNECTING = 1,
-  WIFI_CONNECTED = 2,
-  WIFI_FAILED = 3,
-};
-
 enum HotspotMode : uint8_t {
   HOTSPOT_OFF = 0,
-  HOTSPOT_FALLBACK = 1,
-  HOTSPOT_ALWAYS = 2,
+  HOTSPOT_ON = 1,
 };
 
-inline bool isValidHotspotMode(uint8_t mode) {
-  return mode <= HOTSPOT_ALWAYS;
+inline bool isValidHotspotMode(uint8_t mode) { return mode <= HOTSPOT_ON; }
+
+// Older firmware stored 1 (automatic fallback) or 2 (always on). Without a
+// home network to fall back from, both mean on.
+inline uint8_t hotspotModeFromStored(uint8_t stored) {
+  return stored == HOTSPOT_OFF ? HOTSPOT_OFF : HOTSPOT_ON;
 }
 
 inline bool isValidHotspotPasswordLength(size_t length) {
@@ -117,14 +104,23 @@ inline bool isValidHotspotPasswordLength(size_t length) {
          length <= kHotspotMaxPasswordLength;
 }
 
-inline bool shouldRunHotspot(uint8_t mode, bool stationUsable,
-                             bool stationConnected,
-                             uint32_t disconnectedMs,
-                             uint32_t fallbackTimeoutMs) {
-  if (mode == HOTSPOT_ALWAYS) return true;
-  if (mode != HOTSPOT_FALLBACK) return false;
-  return !stationUsable ||
-         (!stationConnected && disconnectedMs >= fallbackTimeoutMs);
+// Writes a kHotspotGeneratedPasswordLength-character WPA2 password to *out*,
+// one character per byte of *random* (which must hold at least that many).
+// The alphabet leaves out look-alikes (0/O, 1/l/I) in case someone types it
+// instead of scanning the QR code. Returns false if *out* is too small.
+inline bool formatHotspotPassword(char *out, size_t outSize,
+                                  const uint8_t *random) {
+  static constexpr char kAlphabet[] =
+      "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  constexpr size_t kAlphabetSize = sizeof(kAlphabet) - 1;
+  if (!out || !random || outSize <= kHotspotGeneratedPasswordLength) {
+    return false;
+  }
+  for (size_t i = 0; i < kHotspotGeneratedPasswordLength; ++i) {
+    out[i] = kAlphabet[random[i] % kAlphabetSize];
+  }
+  out[kHotspotGeneratedPasswordLength] = '\0';
+  return true;
 }
 
 enum MediaType : uint8_t {
@@ -290,7 +286,7 @@ inline bool shouldSuspendWifi(bool onBattery, bool transferActive,
   return onBattery && !transferActive && msSinceActivity >= timeoutMs;
 }
 
-// On battery or USB, the radio turns fully off (station and hotspot) once
+// On battery or USB, the radio (the hotspot) turns fully off once
 // nothing has been connected to the board over WiFi for this long: no phone
 // joined to the hotspot and no WebSocket client. The clock restarts whenever
 // WiFi comes back on. A BOOT hold, a USB command or plugging in turns it on.
@@ -499,7 +495,7 @@ inline uint8_t nextStoredSlot(const bool used[kMaxStoredItems], uint8_t from) {
 // after that button press and hide on their own.
 enum class HotspotQrStage : uint8_t {
   kHidden,
-  kWaiting,   // Hotspot turned on but not running yet (fallback mode).
+  kWaiting,   // Hotspot turned on but not running yet.
   kJoin,      // WIFI: code with the network name and password.
   kOpenPage,  // http://192.168.4.1/ code.
 };

@@ -11,16 +11,12 @@ import {
   createClearPayload,
   createFrameChunkPayload,
   createTransferIdPayload,
-  createWifiCredentialsPayload,
   createHotspotConfigPayload,
   parseHotspotStatusResponse,
-  parseWifiStatusResponse,
-  WifiState,
 } from './protocol.js';
 import { SerialTransport } from './serial.js';
 import { registerServiceWorker } from './serviceWorker.js';
 import { StoredMediaView, uploadErrorHint } from './storedMedia.js';
-import { WifiTransport } from './wifiTransport.js';
 
 const DEFAULT_CAPABILITIES = {
   width: 170,
@@ -31,20 +27,14 @@ const DEFAULT_CAPABILITIES = {
   codecs: { jpeg: true },
 };
 
-const WIFI_PAIRINGS_KEY = 'cyberclip-wifi-pairings';
-const WIFI_LAST_HOST_KEY = 'cyberclip-wifi-last-host';
+// Left in browsers by the retired home WiFi pairing.
+const RETIRED_STORAGE_KEYS = ['cyberclip-wifi-pairings', 'cyberclip-wifi-last-host'];
 
 const elements = Object.fromEntries([
   'connection-pill',
   'install-button',
   'connect-button',
-  'connect-wifi-button',
-  'setup-wifi-button',
-  'forget-wifi-button',
-  'wifi-host-input',
-  'hotspot-mode-select',
-  'hotspot-password-input',
-  'save-hotspot-button',
+  'hotspot-toggle-button',
   'hotspot-status',
   'disconnect-button',
   'support-message',
@@ -96,15 +86,15 @@ let transferId = 0;
 let activeTransferId = null;
 let playbackController = null;
 let installPrompt = null;
+let hotspotOn = null;
 const webSerialAvailable = globalThis.isSecureContext && 'serial' in navigator;
 
 function handleTransportStateChange(nextState, details) {
   if (nextState === 'ready') {
     capabilities = details;
     updateDeviceDetails();
-    const via = activeTransport === wifiTransport ? 'WiFi' : 'USB';
-    log(`Connected to ${details.deviceName} with firmware ${details.firmwareVersion} over ${via}`);
-    if (activeTransport === serialTransport) void refreshHotspotStatus();
+    log(`Connected to ${details.deviceName} with firmware ${details.firmwareVersion} over USB`);
+    void refreshHotspotStatus();
   }
   if (
     nextState === 'disconnected'
@@ -117,7 +107,10 @@ function handleTransportStateChange(nextState, details) {
     setState(nextState);
   }
   if (nextState === 'ready') void storedMediaView.refresh();
-  if (nextState === 'disconnected') storedMediaView.reset();
+  if (nextState === 'disconnected') {
+    storedMediaView.reset();
+    showHotspotStatus(null, 'Connect over USB to turn the hotspot on or off.');
+  }
 }
 
 function handleTransportProtocolError(error) {
@@ -128,11 +121,6 @@ const serialTransport = new SerialTransport({
   onStateChange: handleTransportStateChange,
   onProtocolError: handleTransportProtocolError,
 });
-const wifiTransport = new WifiTransport({
-  onStateChange: handleTransportStateChange,
-  onProtocolError: handleTransportProtocolError,
-});
-let activeTransport = serialTransport;
 const storedMediaView = new StoredMediaView({
   elements: {
     list: elements['library-list'],
@@ -142,7 +130,7 @@ const storedMediaView = new StoredMediaView({
     count: elements['library-count'],
     refreshButton: elements['library-refresh-button'],
   },
-  getTransport: () => activeTransport,
+  getTransport: () => serialTransport,
   canUseDevice: () => state === 'ready',
   log,
 });
@@ -157,20 +145,15 @@ function initialize() {
   setProgress(0, 'Ready');
   bindEvents();
   void checkForWaitingBoard();
-
-  const lastHost = localStorage.getItem(WIFI_LAST_HOST_KEY);
-  if (lastHost) elements['wifi-host-input'].value = lastHost;
+  for (const key of RETIRED_STORAGE_KEYS) localStorage.removeItem(key);
 
   registerServiceWorker(log);
 }
 
 function bindEvents() {
   elements['connect-button'].addEventListener('click', connectUsb);
-  elements['connect-wifi-button'].addEventListener('click', connectWifi);
-  elements['setup-wifi-button'].addEventListener('click', setupWifi);
-  elements['forget-wifi-button'].addEventListener('click', forgetWifi);
-  elements['save-hotspot-button'].addEventListener('click', saveHotspot);
-  elements['disconnect-button'].addEventListener('click', () => activeTransport.disconnect());
+  elements['hotspot-toggle-button'].addEventListener('click', toggleHotspot);
+  elements['disconnect-button'].addEventListener('click', () => serialTransport.disconnect());
   if (webSerialAvailable) {
     // A board left in download mode (e.g. by an install that was stopped)
     // shows up as the USB-Serial/JTAG unit; point the user at the install page.
@@ -221,7 +204,6 @@ async function checkForWaitingBoard() {
 }
 
 async function connectUsb() {
-  activeTransport = serialTransport;
   let lastError;
   try {
     const authorizedPorts = await navigator.serial.getPorts();
@@ -255,88 +237,6 @@ async function connectUsb() {
   }
 }
 
-async function connectWifi() {
-  const host = elements['wifi-host-input'].value.trim();
-  if (!host) {
-    log('Enter the device IP address or hostname first', 'error');
-    return;
-  }
-  const pairing = loadWifiPairing(host);
-  if (!pairing?.token) {
-    log('Pair over USB first (Set up WiFi) to get a token for this device', 'error');
-    return;
-  }
-  if (serialTransport.connected) await serialTransport.disconnect();
-  activeTransport = wifiTransport;
-  try {
-    await wifiTransport.connect({ host, token: hexToBytes(pairing.token) });
-    localStorage.setItem(WIFI_LAST_HOST_KEY, host);
-  } catch (error) {
-    log(`WiFi connection failed: ${error.message}`, 'error');
-    setState('disconnected');
-  }
-}
-
-async function setupWifi() {
-  if (!serialTransport.connected) {
-    log('Connect over USB first to set up WiFi', 'error');
-    return;
-  }
-  const ssid = globalThis.prompt('WiFi network name (SSID)');
-  if (!ssid) return;
-  const password = globalThis.prompt('WiFi password (leave blank for an open network)') ?? '';
-
-  try {
-    setProgress(0, 'Sending WiFi credentials');
-    const response = await serialTransport.request(
-      Command.SET_WIFI_CREDENTIALS,
-      createWifiCredentialsPayload({ ssid, password }),
-      { expectedCommand: Command.WIFI_STATUS_RESPONSE, timeoutMs: 20000 },
-    );
-    let wifiStatus = parseWifiStatusResponse(response.payload);
-    const token = wifiStatus.token ? bytesToHex(wifiStatus.token) : findAnyStoredWifiToken();
-    if (!token) {
-      throw new Error('This device already has a WiFi pairing token from another browser. Use "Forget WiFi" and set up again to issue a new one.');
-    }
-
-    setProgress(20, `Connecting to "${ssid}"`);
-    for (let attempt = 0; attempt < 15 && wifiStatus.state === WifiState.CONNECTING; attempt += 1) {
-      await abortableDelay(1000);
-      const statusResponse = await serialTransport.request(
-        Command.GET_WIFI_STATUS,
-        new Uint8Array(),
-        { expectedCommand: Command.WIFI_STATUS_RESPONSE },
-      );
-      wifiStatus = parseWifiStatusResponse(statusResponse.payload);
-      setProgress(20 + attempt * 5, `Connecting to "${ssid}"`);
-    }
-    if (wifiStatus.state !== WifiState.CONNECTED) {
-      throw new Error(`Could not join "${ssid}" - check the network name and password`);
-    }
-
-    saveWifiPairing(wifiStatus.ip, token);
-    log(`WiFi ready at ${wifiStatus.ip} (try ${wifiStatus.hostname}.local too). Use "Connect over WiFi" from here on.`);
-    setProgress(100, 'WiFi ready');
-  } catch (error) {
-    log(`WiFi setup failed: ${error.message}`, 'error');
-    setProgress(0, 'Ready');
-  }
-}
-
-async function forgetWifi() {
-  if (!activeTransport.connected) {
-    log('Connect to the device before forgetting WiFi', 'error');
-    return;
-  }
-
-  try {
-    await activeTransport.request(Command.CLEAR_WIFI_CREDENTIALS, new Uint8Array());
-    log('The device forgot its WiFi network. Set up WiFi again to reconnect wirelessly.');
-  } catch (error) {
-    log(`Could not forget WiFi: ${error.message}`, 'error');
-  }
-}
-
 async function refreshHotspotStatus() {
   if (!serialTransport.connected) return;
   try {
@@ -345,43 +245,49 @@ async function refreshHotspotStatus() {
       new Uint8Array(),
       { expectedCommand: Command.HOTSPOT_STATUS_RESPONSE },
     );
-    const status = parseHotspotStatusResponse(response.payload);
-    elements['hotspot-mode-select'].value = String(status.mode);
-    elements['hotspot-status'].textContent = status.running
-      ? `${status.ssid} is running at http://${status.ip}`
-      : status.passwordConfigured
-        ? `${status.ssid} is configured but not currently running.`
-        : 'Set an 8-63 character password before enabling the hotspot.';
-    elements['save-hotspot-button'].disabled = false;
+    showHotspotStatus(parseHotspotStatusResponse(response.payload));
   } catch (error) {
-    elements['save-hotspot-button'].disabled = true;
-    elements['hotspot-status'].textContent = error.errorCode === 2
-      ? 'Update the device firmware to configure phone access.'
-      : `Hotspot status unavailable: ${error.message}`;
+    showHotspotStatus(null, error.errorCode === 2
+      ? 'Update the device firmware to use phone access.'
+      : `Hotspot status unavailable: ${error.message}`);
   }
 }
 
-async function saveHotspot() {
-  if (!serialTransport.connected) return;
+async function toggleHotspot() {
+  if (!serialTransport.connected || hotspotOn === null) return;
+  const button = elements['hotspot-toggle-button'];
+  button.disabled = true;
   try {
-    const payload = createHotspotConfigPayload({
-      mode: Number(elements['hotspot-mode-select'].value),
-      password: elements['hotspot-password-input'].value,
-    });
     const response = await serialTransport.request(
       Command.SET_HOTSPOT_CONFIG,
-      payload,
+      createHotspotConfigPayload({ on: !hotspotOn }),
       { expectedCommand: Command.HOTSPOT_STATUS_RESPONSE, timeoutMs: 20000 },
     );
-    elements['hotspot-password-input'].value = '';
     const status = parseHotspotStatusResponse(response.payload);
-    elements['hotspot-mode-select'].value = String(status.mode);
-    elements['hotspot-status'].textContent = status.running
-      ? `${status.ssid} is running at http://${status.ip}`
-      : `${status.ssid} saved; the hotspot is not currently running.`;
-    log(`Device hotspot updated: ${status.ssid}`);
+    showHotspotStatus(status);
+    log(`Device hotspot turned ${status.on ? 'on' : 'off'}`);
   } catch (error) {
-    log(`Could not update hotspot: ${error.message}`, 'error');
+    // Firmware from before the QR codes wants a typed-in password.
+    const hint = error.errorCode === 3 ? ' Update the device firmware first.' : '';
+    log(`Could not change the hotspot: ${error.message}.${hint}`, 'error');
+    button.disabled = state !== 'ready';
+  }
+}
+
+// Shows *status* (or *message* when there is none) and sets the toggle.
+function showHotspotStatus(status, message) {
+  hotspotOn = status ? status.on : null;
+  const button = elements['hotspot-toggle-button'];
+  button.textContent = hotspotOn ? 'Turn hotspot off' : 'Turn hotspot on';
+  button.disabled = hotspotOn === null || state !== 'ready';
+  if (!status) {
+    elements['hotspot-status'].textContent = message;
+  } else if (status.running) {
+    elements['hotspot-status'].textContent = `${status.ssid} is on. Scan the QR code on the display to join it, then open http://${status.ip}.`;
+  } else if (status.on) {
+    elements['hotspot-status'].textContent = `${status.ssid} is on and starting up.`;
+  } else {
+    elements['hotspot-status'].textContent = `${status.ssid} is off.`;
   }
 }
 
@@ -391,7 +297,7 @@ async function handleMediaSelection(event) {
   decodedGif = null;
   if (!selectedFile) {
     clearPreview();
-    setState(activeTransport.connected ? 'ready' : 'disconnected');
+    setState(serialTransport.connected ? 'ready' : 'disconnected');
     return;
   }
 
@@ -403,13 +309,13 @@ async function handleMediaSelection(event) {
     await refreshPreview();
     log(`Loaded ${selectedFile.name}${decodedGif ? ` · ${decodedGif.frames.length} frames` : ''}`);
     setProgress(0, 'Ready');
-    setState(activeTransport.connected ? 'ready' : 'disconnected');
+    setState(serialTransport.connected ? 'ready' : 'disconnected');
   } catch (error) {
     selectedFile = null;
     event.target.value = '';
     clearPreview();
     log(error.message, 'error');
-    setState(activeTransport.connected ? 'ready' : 'disconnected');
+    setState(serialTransport.connected ? 'ready' : 'disconnected');
   }
 }
 
@@ -456,7 +362,7 @@ async function displayImage() {
     if (error.name !== 'AbortError') logUploadFailure('Display failed', error);
   } finally {
     playbackController = null;
-    setState(activeTransport.connected ? 'ready' : 'disconnected');
+    setState(serialTransport.connected ? 'ready' : 'disconnected');
     if (persist) void storedMediaView.refresh();
   }
 }
@@ -526,15 +432,15 @@ async function playGif() {
     if (error.name !== 'AbortError') logUploadFailure('GIF playback failed', error);
   } finally {
     playbackController = null;
-    setState(activeTransport.connected ? 'ready' : 'disconnected');
+    setState(serialTransport.connected ? 'ready' : 'disconnected');
     if (persist) void storedMediaView.refresh();
   }
 }
 
 function stopPlayback() {
   playbackController?.abort();
-  if (activeTransferId && activeTransport.connected) {
-    void activeTransport.request(
+  if (activeTransferId && serialTransport.connected) {
+    void serialTransport.request(
       Command.CANCEL_TRANSFER,
       createTransferIdPayload(activeTransferId),
     ).catch(() => {});
@@ -542,7 +448,7 @@ function stopPlayback() {
 }
 
 async function beginPlaylist(mediaType, frameCount, loop) {
-  await activeTransport.request(Command.BEGIN_PLAYLIST, createBeginPlaylistPayload({
+  await serialTransport.request(Command.BEGIN_PLAYLIST, createBeginPlaylistPayload({
     mediaType,
     frameCount,
     loop,
@@ -551,12 +457,12 @@ async function beginPlaylist(mediaType, frameCount, loop) {
 }
 
 async function finishPlaylist() {
-  await activeTransport.request(Command.END_PLAYLIST, new Uint8Array(), { timeoutMs: 30000 });
+  await serialTransport.request(Command.END_PLAYLIST, new Uint8Array(), { timeoutMs: 30000 });
 }
 
 async function cancelPersistentUpload() {
-  if (!activeTransport.connected) return;
-  await activeTransport.request(Command.CANCEL_TRANSFER, new Uint8Array()).catch(() => {});
+  if (!serialTransport.connected) return;
+  await serialTransport.request(Command.CANCEL_TRANSFER, new Uint8Array()).catch(() => {});
 }
 
 async function sendFrame(prepared, signal, progressContext = {}) {
@@ -572,7 +478,7 @@ async function sendFrame(prepared, signal, progressContext = {}) {
   const maxDataLength = Math.max(1, Math.min(4090, capabilities.maxChunk));
 
   try {
-    await activeTransport.request(Command.BEGIN_FRAME, createBeginFramePayload({
+    await serialTransport.request(Command.BEGIN_FRAME, createBeginFramePayload({
       transferId,
       width: prepared.width,
       height: prepared.height,
@@ -586,7 +492,7 @@ async function sendFrame(prepared, signal, progressContext = {}) {
     for (let offset = 0; offset < prepared.bytes.length; offset += maxDataLength) {
       throwIfAborted(signal);
       const chunk = prepared.bytes.subarray(offset, offset + maxDataLength);
-      await activeTransport.request(
+      await serialTransport.request(
         Command.FRAME_CHUNK,
         createFrameChunkPayload(transferId, offset, chunk),
       );
@@ -598,14 +504,14 @@ async function sendFrame(prepared, signal, progressContext = {}) {
     }
 
     throwIfAborted(signal);
-    await activeTransport.request(
+    await serialTransport.request(
       Command.COMMIT_FRAME,
       createTransferIdPayload(transferId),
       { timeoutMs: 12000 },
     );
   } catch (error) {
-    if (activeTransport.connected) {
-      await activeTransport.request(
+    if (serialTransport.connected) {
+      await serialTransport.request(
         Command.CANCEL_TRANSFER,
         createTransferIdPayload(transferId),
       ).catch(() => {});
@@ -618,10 +524,10 @@ async function sendFrame(prepared, signal, progressContext = {}) {
 
 async function updateBacklight() {
   savePreferences();
-  if (!activeTransport.connected || state !== 'ready') return;
+  if (!serialTransport.connected || state !== 'ready') return;
   const value = Math.round(Number(elements['backlight-input'].value) * 2.55);
   try {
-    await activeTransport.request(Command.SET_BACKLIGHT, Uint8Array.of(value));
+    await serialTransport.request(Command.SET_BACKLIGHT, Uint8Array.of(value));
     log(`Backlight set to ${elements['backlight-input'].value}%`);
   } catch (error) {
     log(`Backlight update failed: ${error.message}`, 'error');
@@ -630,7 +536,7 @@ async function updateBacklight() {
 
 async function clearDisplay() {
   try {
-    await activeTransport.request(Command.CLEAR_DISPLAY, createClearPayload(0));
+    await serialTransport.request(Command.CLEAR_DISPLAY, createClearPayload(0));
     log('Display cleared');
   } catch (error) {
     log(`Clear failed: ${error.message}`, 'error');
@@ -640,8 +546,8 @@ async function clearDisplay() {
 async function removeStoredMedia() {
   if (!globalThis.confirm('Delete everything saved on the device? This cannot be undone.')) return;
   try {
-    await activeTransport.request(Command.CLEAR_STORED, new Uint8Array(), { timeoutMs: 30000 });
-    await activeTransport.request(Command.CLEAR_DISPLAY, createClearPayload(0));
+    await serialTransport.request(Command.CLEAR_STORED, new Uint8Array(), { timeoutMs: 30000 });
+    await serialTransport.request(Command.CLEAR_DISPLAY, createClearPayload(0));
     log('All saved media deleted');
   } catch (error) {
     log(`Could not delete saved media: ${error.message}`, 'error');
@@ -673,17 +579,13 @@ function imageOptions() {
 
 function setState(nextState) {
   state = nextState;
-  const connected = activeTransport.connected;
+  const connected = serialTransport.connected;
   const ready = nextState === 'ready';
   const busy = ['processing', 'transferring', 'playing', 'cancelling'].includes(nextState);
   const isGif = selectedFile?.type === 'image/gif';
-  const connectedViaUsb = serialTransport.connected;
 
   elements['connect-button'].disabled = nextState !== 'disconnected' || !webSerialAvailable;
-  elements['connect-wifi-button'].disabled = nextState !== 'disconnected';
-  elements['setup-wifi-button'].disabled = !ready || !connectedViaUsb;
-  elements['forget-wifi-button'].disabled = !ready;
-  elements['save-hotspot-button'].disabled = !ready || !connectedViaUsb;
+  elements['hotspot-toggle-button'].disabled = !ready || hotspotOn === null;
   elements['disconnect-button'].disabled = !connected || busy;
   elements['display-button'].disabled = !ready || !selectedFile || isGif;
   elements['play-button'].disabled = !ready || !decodedGif;
@@ -701,9 +603,7 @@ function setState(nextState) {
 function updateDeviceDetails() {
   elements['device-resolution'].textContent = `${capabilities.width} × ${capabilities.height}`;
   elements['device-firmware'].textContent = capabilities.firmwareVersion;
-  elements['device-transport'].textContent = activeTransport === wifiTransport
-    ? `WiFi · ${wifiTransport.host}`
-    : 'USB · 921600 baud';
+  elements['device-transport'].textContent = 'USB · 921600 baud';
   elements['device-codec'].textContent = capabilities.codecs.jpeg ? 'JPEG' : 'Unsupported';
   elements['device-storage'].textContent = capabilities.persistentStorage
     ? `${formatBytes(capabilities.maxStoredBytes)} flash`
@@ -720,7 +620,7 @@ function updateSupportMessage() {
   if (!globalThis.isSecureContext) {
     message = 'Web Serial requires HTTPS or localhost. Open this app from a secure origin.';
   } else if (!('serial' in navigator)) {
-    message = 'Web Serial is unavailable. Use the current desktop version of Chrome or Edge. WiFi control still works once a device has been paired.';
+    message = 'Web Serial is unavailable. Use the current desktop version of Chrome or Edge.';
   }
   elements['support-message'].hidden = !message;
   elements['support-message'].textContent = message;
@@ -791,43 +691,6 @@ function restorePreferences() {
   } catch {
     localStorage.removeItem('cyberclip-preferences');
   }
-}
-
-function loadWifiPairings() {
-  try {
-    return JSON.parse(localStorage.getItem(WIFI_PAIRINGS_KEY)) ?? {};
-  } catch {
-    return {};
-  }
-}
-
-function loadWifiPairing(host) {
-  return loadWifiPairings()[host] ?? null;
-}
-
-function findAnyStoredWifiToken() {
-  const [first] = Object.values(loadWifiPairings());
-  return first?.token ?? null;
-}
-
-function saveWifiPairing(host, token) {
-  const pairings = loadWifiPairings();
-  pairings[host] = { token };
-  localStorage.setItem(WIFI_PAIRINGS_KEY, JSON.stringify(pairings));
-  localStorage.setItem(WIFI_LAST_HOST_KEY, host);
-  elements['wifi-host-input'].value = host;
-}
-
-function bytesToHex(bytes) {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-function hexToBytes(hex) {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < bytes.length; i += 1) {
-    bytes[i] = Number.parseInt(hex.substr(i * 2, 2), 16);
-  }
-  return bytes;
 }
 
 function stateLabel(value) {

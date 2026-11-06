@@ -21,16 +21,12 @@ export const Command = Object.freeze({
   SELECT_STORED: 0x35,
   DELETE_STORED: 0x36,
   READ_STORED_FRAME: 0x37,
-  SET_WIFI_CREDENTIALS: 0x40,
-  GET_WIFI_STATUS: 0x41,
-  CLEAR_WIFI_CREDENTIALS: 0x42,
-  SET_WIFI_ENABLED: 0x43,
+  // 0x40-0x43 and 0xa3 were the retired home WiFi commands.
   SET_HOTSPOT_CONFIG: 0x44,
   GET_HOTSPOT_STATUS: 0x45,
   TURN_OFF_HOTSPOT: 0x46,
   HELLO_RESPONSE: 0x81,
   STATUS_RESPONSE: 0xa2,
-  WIFI_STATUS_RESPONSE: 0xa3,
   HOTSPOT_STATUS_RESPONSE: 0xa4,
   STORED_LIST_RESPONSE: 0xa5,
   STORED_FRAME_RESPONSE: 0xa6,
@@ -38,19 +34,9 @@ export const Command = Object.freeze({
   NACK: 0xf1,
 });
 
-export const WIFI_TOKEN_SIZE = 16;
-
-export const WifiState = Object.freeze({
-  OFF: 0,
-  CONNECTING: 1,
-  CONNECTED: 2,
-  FAILED: 3,
-});
-
 export const HotspotMode = Object.freeze({
   OFF: 0,
-  FALLBACK: 1,
-  ALWAYS: 2,
+  ON: 1,
 });
 
 export const ErrorCode = Object.freeze({
@@ -277,66 +263,23 @@ export function createClearPayload(rgb565 = 0) {
   return payload;
 }
 
-export function createWifiCredentialsPayload({ ssid, password }) {
-  const ssidBytes = new TextEncoder().encode(ssid);
-  const passwordBytes = new TextEncoder().encode(password ?? '');
-  if (ssidBytes.byteLength === 0 || ssidBytes.byteLength > 32) {
-    throw new ProtocolError('WiFi network name must be 1-32 bytes');
-  }
-  if (passwordBytes.byteLength > 64) {
-    throw new ProtocolError('WiFi password must be at most 64 bytes');
-  }
-  const payload = new Uint8Array(1 + ssidBytes.byteLength + 1 + passwordBytes.byteLength);
-  payload[0] = ssidBytes.byteLength;
-  payload.set(ssidBytes, 1);
-  payload[1 + ssidBytes.byteLength] = passwordBytes.byteLength;
-  payload.set(passwordBytes, 1 + ssidBytes.byteLength + 1);
-  return payload;
-}
-
-export function parseWifiStatusResponse(payload) {
-  if (payload.byteLength < 6) {
-    throw new ProtocolError('Device returned an incomplete WiFi status response');
-  }
-  const view = viewOf(payload);
-  const state = view.getUint8(0);
-  const ip = Array.from(payload.subarray(1, 5)).join('.');
-  const hostnameLength = view.getUint8(5);
-  const hostname = new TextDecoder().decode(payload.subarray(6, 6 + hostnameLength));
-  const tokenOffset = 6 + hostnameLength;
-  const tokenIncluded = payload.at(tokenOffset) === 1;
-  const token = tokenIncluded
-    ? payload.slice(tokenOffset + 1, tokenOffset + 1 + WIFI_TOKEN_SIZE)
-    : null;
-  return { state, connected: state === WifiState.CONNECTED, ip, hostname, token };
-}
-
-export function createHotspotConfigPayload({ mode, password = '' }) {
-  if (!Object.values(HotspotMode).includes(mode)) {
-    throw new ProtocolError('Choose a valid hotspot mode');
-  }
-  const passwordBytes = new TextEncoder().encode(password);
-  if (passwordBytes.byteLength !== 0
-      && (passwordBytes.byteLength < 8 || passwordBytes.byteLength > 63)) {
-    throw new ProtocolError('Hotspot password must be 8-63 bytes');
-  }
-  return Uint8Array.of(mode, passwordBytes.byteLength, ...passwordBytes);
+// The board makes its own hotspot password and shows it as a QR code, so the
+// only setting left is on or off.
+export function createHotspotConfigPayload({ on }) {
+  return Uint8Array.of(on ? HotspotMode.ON : HotspotMode.OFF);
 }
 
 export function parseHotspotStatusResponse(payload) {
   if (payload.byteLength < 8) {
     throw new ProtocolError('Device returned an incomplete hotspot status response');
   }
-  const mode = payload[0];
-  if (!Object.values(HotspotMode).includes(mode)) {
-    throw new ProtocolError('Device returned an invalid hotspot mode');
-  }
   const ssidLength = payload[7];
   if (payload.byteLength !== 8 + ssidLength) {
     throw new ProtocolError('Device returned an invalid hotspot status response');
   }
   return {
-    mode,
+    // Older firmware reports 1 (automatic fallback) or 2 (always on).
+    on: payload[0] !== HotspotMode.OFF,
     running: payload[1] === 1,
     passwordConfigured: payload[2] === 1,
     ip: Array.from(payload.subarray(3, 7)).join('.'),

@@ -218,39 +218,57 @@ void test_stored_media_command_bytes() {
 }
 
 void test_wifi_command_bytes_do_not_collide() {
-  TEST_ASSERT_EQUAL_HEX8(0x40, SET_WIFI_CREDENTIALS);
-  TEST_ASSERT_EQUAL_HEX8(0x41, GET_WIFI_STATUS);
-  TEST_ASSERT_EQUAL_HEX8(0x42, CLEAR_WIFI_CREDENTIALS);
-  TEST_ASSERT_EQUAL_HEX8(0x43, SET_WIFI_ENABLED);
   TEST_ASSERT_EQUAL_HEX8(0x44, SET_HOTSPOT_CONFIG);
   TEST_ASSERT_EQUAL_HEX8(0x45, GET_HOTSPOT_STATUS);
   TEST_ASSERT_EQUAL_HEX8(0x46, TURN_OFF_HOTSPOT);
-  TEST_ASSERT_EQUAL_HEX8(0xA3, WIFI_STATUS_RESPONSE);
   TEST_ASSERT_EQUAL_HEX8(0xA4, HOTSPOT_STATUS_RESPONSE);
-  TEST_ASSERT_EQUAL_UINT8(16, kWifiTokenSize);
   TEST_ASSERT_EQUAL_UINT8(32, kWifiMaxSsidLength);
-  TEST_ASSERT_EQUAL_UINT8(64, kWifiMaxPasswordLength);
 }
 
-void test_hotspot_validation_and_fallback_policy() {
+void test_hotspot_modes_and_passwords() {
   TEST_ASSERT_TRUE(isValidHotspotMode(HOTSPOT_OFF));
-  TEST_ASSERT_TRUE(isValidHotspotMode(HOTSPOT_ALWAYS));
-  TEST_ASSERT_FALSE(isValidHotspotMode(3));
+  TEST_ASSERT_TRUE(isValidHotspotMode(HOTSPOT_ON));
+  TEST_ASSERT_FALSE(isValidHotspotMode(2));
+
+  // Fallback (1) and always-on (2) from older firmware both become on.
+  TEST_ASSERT_EQUAL_UINT8(HOTSPOT_OFF, hotspotModeFromStored(0));
+  TEST_ASSERT_EQUAL_UINT8(HOTSPOT_ON, hotspotModeFromStored(1));
+  TEST_ASSERT_EQUAL_UINT8(HOTSPOT_ON, hotspotModeFromStored(2));
+  TEST_ASSERT_EQUAL_UINT8(HOTSPOT_ON, hotspotModeFromStored(200));
+
   TEST_ASSERT_FALSE(isValidHotspotPasswordLength(7));
   TEST_ASSERT_TRUE(isValidHotspotPasswordLength(8));
   TEST_ASSERT_TRUE(isValidHotspotPasswordLength(63));
   TEST_ASSERT_FALSE(isValidHotspotPasswordLength(64));
+  TEST_ASSERT_TRUE(
+      isValidHotspotPasswordLength(kHotspotGeneratedPasswordLength));
+}
 
-  TEST_ASSERT_FALSE(shouldRunHotspot(HOTSPOT_OFF, false, false, 20000, 15000));
-  TEST_ASSERT_TRUE(shouldRunHotspot(HOTSPOT_ALWAYS, true, true, 0, 15000));
-  TEST_ASSERT_TRUE(
-      shouldRunHotspot(HOTSPOT_FALLBACK, false, false, 0, 15000));
-  TEST_ASSERT_FALSE(
-      shouldRunHotspot(HOTSPOT_FALLBACK, true, false, 14999, 15000));
-  TEST_ASSERT_TRUE(
-      shouldRunHotspot(HOTSPOT_FALLBACK, true, false, 15000, 15000));
-  TEST_ASSERT_FALSE(
-      shouldRunHotspot(HOTSPOT_FALLBACK, true, true, 20000, 15000));
+void test_generated_hotspot_password() {
+  uint8_t random[kHotspotGeneratedPasswordLength];
+  for (size_t i = 0; i < sizeof(random); ++i) {
+    random[i] = static_cast<uint8_t>(i * 23 + 255 * (i % 2));
+  }
+  char password[kHotspotGeneratedPasswordLength + 1];
+  TEST_ASSERT_TRUE(formatHotspotPassword(password, sizeof(password), random));
+  TEST_ASSERT_EQUAL_size_t(kHotspotGeneratedPasswordLength, strlen(password));
+  for (size_t i = 0; i < kHotspotGeneratedPasswordLength; ++i) {
+    const char c = password[i];
+    TEST_ASSERT_TRUE((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                     (c >= '2' && c <= '9'));
+    TEST_ASSERT_NULL(strchr("0O1lI", c));
+  }
+  // The same bytes give the same password; different bytes a different one.
+  char again[kHotspotGeneratedPasswordLength + 1];
+  formatHotspotPassword(again, sizeof(again), random);
+  TEST_ASSERT_EQUAL_STRING(password, again);
+  random[0] ^= 1;
+  formatHotspotPassword(again, sizeof(again), random);
+  TEST_ASSERT_TRUE(strcmp(password, again) != 0);
+
+  // No room for the terminator.
+  TEST_ASSERT_FALSE(formatHotspotPassword(
+      password, kHotspotGeneratedPasswordLength, random));
 }
 
 void test_power_policy() {
@@ -492,7 +510,8 @@ void runTests() {
   RUN_TEST(test_wifi_qr_payload);
   RUN_TEST(test_hotspot_qr_stages);
   RUN_TEST(test_wifi_command_bytes_do_not_collide);
-  RUN_TEST(test_hotspot_validation_and_fallback_policy);
+  RUN_TEST(test_hotspot_modes_and_passwords);
+  RUN_TEST(test_generated_hotspot_password);
   RUN_TEST(test_power_policy);
   RUN_TEST(test_ams_entity_update_parsing);
   RUN_TEST(test_ams_playback_state);

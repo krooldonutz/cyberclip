@@ -33,7 +33,7 @@ const elements = Object.fromEntries([
 ].map((id) => [id, document.getElementById(id)]));
 
 const WAITING_MESSAGE =
-  'Your board is waiting in update mode. Select Install firmware to finish installing; your WiFi settings are kept.';
+  'Your board is waiting in update mode. Select Install firmware to finish installing; your hotspot settings are kept.';
 
 const webSerialAvailable = globalThis.isSecureContext && 'serial' in navigator;
 let versions = [];
@@ -185,7 +185,7 @@ async function installFirmware() {
   if (!version) return;
   const older = versions.find((candidate) => candidate.latest)?.version !== version;
   if (!globalThis.confirm(
-    `Install Cyberclip firmware ${version}${older ? ' (an older version)' : ''}? Your WiFi settings and saved media are kept. Keep the USB cable connected until installation finishes.`,
+    `Install Cyberclip firmware ${version}${older ? ' (an older version)' : ''}? Your hotspot settings and saved media are kept. Keep the USB cable connected until installation finishes.`,
   )) {
     return;
   }

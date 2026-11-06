@@ -1,17 +1,31 @@
 {
-  "version": "2.0.30",
+  "version": "2.0.31",
   "builds": [
     {
       "chip": "ESP32-S3",
       "board": "LilyGO T-Display-S3",
-      "path": "/firmware/cyberclip-lilygo-t-display-s3-2.0.30.bin",
+      "path": "/firmware/cyberclip-lilygo-t-display-s3-2.0.31.bin",
       "address": 0,
-      "size": 1840720,
+      "size": 1837328,
       "flashMode": "keep",
       "flashFreq": "keep"
     }
   ],
   "versions": [
+    {
+      "version": "2.0.31",
+      "builds": [
+        {
+          "chip": "ESP32-S3",
+          "board": "LilyGO T-Display-S3",
+          "path": "/firmware/cyberclip-lilygo-t-display-s3-2.0.31.bin",
+          "address": 0,
+          "size": 1837328,
+          "flashMode": "keep",
+          "flashFreq": "keep"
+        }
+      ]
+    },
     {
       "version": "2.0.30",
       "builds": [

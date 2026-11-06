@@ -45,7 +45,7 @@
         <div id="install-notice" class="notice notice-warning install-notice" role="status" hidden>
           <p>
             Your board is waiting in update mode.
-            <a href="/install.html">Open Install firmware</a> to finish installing; your WiFi settings are kept.
+            <a href="/install.html">Open Install firmware</a> to finish installing; your hotspot settings are kept.
           </p>
         </div>
         <p class="device-help">
@@ -63,59 +63,17 @@
 
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Local network</p>
-            <h2>Connect over WiFi</h2>
-          </div>
-        </div>
-        <p class="device-help">
-          Pair over USB once with <strong>Set up WiFi</strong> to give the device your network's SSID/password and issue it a local pairing token. After that, control, media upload, and forgetting the network work wirelessly on your own LAN &mdash; there is no cloud relay.
-        </p>
-        <div class="button-row">
-          <button id="setup-wifi-button" class="button button-secondary" disabled>Set up WiFi</button>
-          <button id="forget-wifi-button" class="button button-quiet" disabled>Forget WiFi</button>
-        </div>
-        <label>
-          Device IP or hostname
-          <input id="wifi-host-input" type="text" placeholder="192.168.1.42 or cyberclip.local">
-        </label>
-        <div class="button-row">
-          <button id="connect-wifi-button" class="button button-primary">Connect over WiFi</button>
-        </div>
-
-        <div class="divider"></div>
-
-        <div class="section-heading">
-          <div>
             <p class="eyebrow">Phone access</p>
             <h2>Device hotspot</h2>
           </div>
         </div>
         <p class="device-help">
-          Host a private upload page directly from the display. Configure it over USB, then join the device network from your phone and open <strong>http://192.168.4.1</strong>.
+          The display hosts a private upload page on its own WiFi network. Turn the hotspot on here or by holding <strong>BOOT</strong>, then scan the QR codes on the screen with your phone: the first joins the network, the second opens the page.
         </p>
-        <div class="hotspot-controls">
-          <label>
-            Hotspot mode
-            <select id="hotspot-mode-select">
-              <option value="0">Off</option>
-              <option value="1">Automatic fallback</option>
-              <option value="2">Always on</option>
-            </select>
-          </label>
-          <label>
-            WPA2 password
-            <input
-              id="hotspot-password-input"
-              type="password"
-              minlength="8"
-              maxlength="63"
-              autocomplete="new-password"
-              placeholder="Leave blank to keep current password"
-            >
-          </label>
-          <button id="save-hotspot-button" class="button button-secondary" disabled>Save hotspot</button>
+        <div class="button-row">
+          <button id="hotspot-toggle-button" class="button button-secondary" disabled>Turn hotspot on</button>
         </div>
-        <p id="hotspot-status" class="device-help">Connect over USB to configure phone access.</p>
+        <p id="hotspot-status" class="device-help">Connect over USB to turn the hotspot on or off.</p>
       </section>
 
       <section class="workspace">
