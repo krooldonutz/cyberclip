@@ -290,6 +290,18 @@ inline bool shouldSuspendWifi(bool onBattery, bool transferActive,
   return onBattery && !transferActive && msSinceActivity >= timeoutMs;
 }
 
+// On battery or USB, the radio turns fully off (station and hotspot) once
+// nothing has been connected to the board over WiFi for this long: no phone
+// joined to the hotspot and no WebSocket client. The clock restarts whenever
+// WiFi comes back on. A BOOT hold, a USB command or plugging in turns it on.
+constexpr uint32_t kWifiNoConnectionTimeoutMs = 60 * 1000;
+
+inline bool shouldSuspendWifiWithoutConnection(bool connected,
+                                               uint32_t msSinceConnection,
+                                               uint32_t timeoutMs) {
+  return !connected && msSinceConnection >= timeoutMs;
+}
+
 constexpr uint32_t kLoopIdleSleepMs = 1;
 // Longest idle sleep on battery while the CPU runs at the reduced clock.
 // Short enough that the buttons still feel instant.

@@ -129,7 +129,7 @@ constexpr uint32_t kSleepButtonDebounceMs = 30;
 constexpr uint32_t kHotspotButtonHoldMs = 1500;
 constexpr uint8_t kFirmwareMajor = 2;
 constexpr uint8_t kFirmwareMinor = 0;
-constexpr uint8_t kFirmwarePatch = 28;
+constexpr uint8_t kFirmwarePatch = 29;
 using board::kDeviceName;
 // Before the saved media library, the board kept one item: /playlist.meta
 // with frames in /aNNN.jpg or /bNNN.jpg. It is moved into slot 0 on boot.
@@ -517,6 +517,8 @@ struct {
   bool checked = false;
   uint32_t checkedAt = 0;
   uint32_t lastActivityAt = 0;
+  // Last time something was connected over WiFi (or WiFi came back on).
+  uint32_t lastWifiConnectionAt = 0;
 } power;
 
 void setFullSpeed(bool fullSpeed) {
@@ -559,8 +561,12 @@ void updatePowerMode() {
     power.onBattery = onBatteryPower(power.onBattery, readBatteryMillivolts());
     if (power.onBattery != wasOnBattery) {
       applyBacklight();
-      // Plugging in or unplugging restarts the WiFi idle timer.
-      if (power.checked) power.lastActivityAt = now;
+      // Plugging in or unplugging restarts the WiFi idle timer and brings
+      // WiFi back if it was off.
+      if (power.checked) {
+        power.lastActivityAt = now;
+        wifiManager.resume();
+      }
     }
     power.checked = true;
     power.checkedAt = now;
@@ -569,11 +575,22 @@ void updatePowerMode() {
                                     now - power.lastActivityAt,
                                     kFullSpeedHoldMs));
 
+  // While WiFi is off (or the hotspot QR codes are up for someone joining)
+  // the no-connection clock does not run, so it starts fresh when WiFi
+  // comes back on.
+  const bool wifiConnected =
+      wifiManager.hotspotStationCount() > 0 || wsHasClient() ||
+      wsHasActiveApClientOrTransfer();
+  if (wifiManager.suspended() || wifiConnected || hotspotQr.visible()) {
+    power.lastWifiConnectionAt = now;
+  }
+
   if (shouldSuspendWifi(power.onBattery, transfer.active,
-                        now - power.lastActivityAt, kWifiIdleTimeoutMs)) {
+                        now - power.lastActivityAt, kWifiIdleTimeoutMs) ||
+      shouldSuspendWifiWithoutConnection(
+          wifiConnected, now - power.lastWifiConnectionAt,
+          kWifiNoConnectionTimeoutMs)) {
     wifiManager.suspend();
-  } else if (!power.onBattery) {
-    wifiManager.resume();
   }
 }
 

@@ -154,6 +154,11 @@ void wsServerBegin() {
   server.begin();
 }
 
+bool wsHasClient() {
+  AsyncWebSocketClient *client = activeClient;
+  return client != nullptr && client->status() == WS_CONNECTED;
+}
+
 bool wsHasActiveApClientOrTransfer() {
   if (activeClient != nullptr && activeClientAuthorized &&
       activeClientIsAp && activeClient->status() == WS_CONNECTED) {

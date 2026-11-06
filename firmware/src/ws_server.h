@@ -34,4 +34,7 @@ void wsSendFrame(const uint8_t *data, size_t length);
 // or an AP-side HTTP asset transfer has run recently.
 bool wsHasActiveApClientOrTransfer();
 
+// True while any WebSocket client (station or hotspot side) is connected.
+bool wsHasClient();
+
 }  // namespace cyberclip

@@ -79,8 +79,11 @@ still shows and saves the level you set.
 On battery, the T-Display-S3 also turns WiFi (both the network connection and
 the hotspot) fully off after 2 minutes without a command from the app. These
 are the same actions that show up in the activity log, such as connecting,
-sending media, or changing the backlight. Saved media keeps playing while WiFi
-is off. To bring WiFi back, connect over USB, plug in USB power, hold **BOOT**
+sending media, or changing the backlight. On battery or USB, WiFi also turns
+fully off when nothing has been connected to the board over WiFi for 60
+seconds (no phone joined to the hotspot and no app connection); the countdown
+pauses while the hotspot QR codes are on screen. Saved media keeps playing
+while WiFi is off. To bring WiFi back, connect over USB, plug in USB power, hold **BOOT**
 for 1.5 seconds (the screen shows **WiFi on**), or wake the board from deep
 sleep. Your WiFi and hotspot settings are not changed.
 

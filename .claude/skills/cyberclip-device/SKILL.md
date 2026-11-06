@@ -39,7 +39,8 @@ Flash when the user asked you to test or install a change. Ask first if they onl
 ## What this can and can't tell you
 
 - `status` fields after `free_heap` (battery, power source, CPU clock, uptime) need firmware 2.0.25+. Older firmware says so in a `note` line.
-- While USB is plugged in the board is **not** on battery: `on_battery` is false, the voltage reads the USB/charger rail, and the CPU stays at 160 MHz. So real battery drain and the battery-only power savings (80 MHz clock, 20 ms idle sleep, WiFi turning off after 2 minutes) cannot be measured over USB. Say this plainly rather than presenting USB readings as battery results.
+- WiFi turns fully off after 60 s with no phone or app connected over WiFi, on USB too, so `wifi` often reads `off`; that is expected.
+- While USB is plugged in the board is **not** on battery: `on_battery` is false, the voltage reads the USB/charger rail, and the CPU stays at 160 MHz. So real battery drain and the battery-only power savings (80 MHz clock, 20 ms idle sleep, WiFi turning off after 2 minutes without a command) cannot be measured over USB. Say this plainly rather than presenting USB readings as battery results.
 - For a real battery-life check, the user has to run the board unplugged and note how long it lasts (or plug in afterwards and read `uptime_s` before it sleeps). Offer that as a manual step.
 - The display can't be seen from here. Ask the user to look at the screen when the change is visual.
 

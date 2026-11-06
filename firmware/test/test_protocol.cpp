@@ -285,6 +285,12 @@ void test_power_policy() {
   TEST_ASSERT_TRUE(shouldSuspendWifi(true, false, 120000, 120000));
   TEST_ASSERT_FALSE(shouldSuspendWifi(true, true, 600000, 120000));
 
+  // No phone or WebSocket client for a minute turns WiFi off on any power.
+  TEST_ASSERT_EQUAL_UINT32(60000, kWifiNoConnectionTimeoutMs);
+  TEST_ASSERT_FALSE(shouldSuspendWifiWithoutConnection(false, 59999, 60000));
+  TEST_ASSERT_TRUE(shouldSuspendWifiWithoutConnection(false, 60000, 60000));
+  TEST_ASSERT_FALSE(shouldSuspendWifiWithoutConnection(true, 600000, 60000));
+
   TEST_ASSERT_EQUAL_UINT32(0, loopIdleSleepMs(true, false, 0));
   TEST_ASSERT_EQUAL_UINT32(1, loopIdleSleepMs(false, false, 0));
   TEST_ASSERT_EQUAL_UINT32(0, loopIdleSleepMs(false, true, 1));
