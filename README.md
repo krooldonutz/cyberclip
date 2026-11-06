@@ -1,8 +1,8 @@
 # Cyberclip
 
-Cyberclip is a VIA-style web controller for the **LilyGO T-Display-S3 (ESP32-S3 with an integrated 1.9-inch 170×320 ST7789 TFT)**. It processes images and GIFs in the browser, compresses each display frame as JPEG, and sends it directly to the board over USB with the Web Serial API, or over your own local WiFi network.
+Cyberclip is a VIA-style web controller for the **LilyGO T-Display-S3 (ESP32-S3 with an integrated 1.9-inch 170×320 ST7789 TFT)**. It processes images and GIFs in the browser, compresses each display frame as JPEG, and sends it directly to the board over USB with the Web Serial API. Phones can also upload over the board's own WiFi hotspot.
 
-There is no application server, Python CLI, or cloud relay. Bluetooth is used only to show what an iPhone is playing, and is currently turned off to save battery (see [iPhone now playing](#iphone-now-playing-bluetooth)); media still travels over USB or WiFi. WiFi is optional and local-only: the board can join your existing network or host its own WPA2-protected hotspot and phone upload page. WiFi and hotspot settings are provisioned over USB (see [WiFi control](#wifi-control) below). Media processing runs in the connected browser using the same image, GIF, and protocol modules in the desktop and hosted builds. Firmware flashing remains USB-only. The ESP32 receives validated frames, decodes them, and draws them to its display. When **Keep media on device** is enabled, it also stores the image or GIF in flash and resumes it without a USB data connection.
+There is no application server, Python CLI, or cloud relay. Bluetooth is used only to show what an iPhone is playing, and is currently turned off to save battery (see [iPhone now playing](#iphone-now-playing-bluetooth)); media still travels over USB or WiFi. WiFi is optional and local-only: the board never joins another network, but can host its own WPA2-protected hotspot and phone upload page, which phones join by scanning a QR code on the screen (see [Phone upload over the hotspot](#phone-upload-over-the-hotspot) below). Media processing runs in the connected browser using the same image, GIF, and protocol modules in the desktop and hosted builds. Firmware flashing remains USB-only. The ESP32 receives validated frames, decodes them, and draws them to its display. When **Keep media on device** is enabled, it also stores the image or GIF in flash and resumes it without a USB data connection.
 
 ## Supported hardware
 
@@ -17,7 +17,7 @@ download mode, where it briefly shows up as **USB JTAG/serial debug unit**. If
 the browser has not been allowed to use that device yet, select **Continue
 installation** and choose it (the browser remembers it for later updates). The
 installer restarts the board itself when it finishes, so the BOOT and RST
-buttons are never needed. WiFi and hotspot settings are kept. If an install is
+buttons are never needed. Hotspot settings are kept. If an install is
 stopped part-way, the board waits in download mode and the app says so; select
 **Install firmware** again on the install page to finish. After installation,
 open **Upload media**, select **Connect** and choose **Pixie Pixel Gear**.
@@ -55,8 +55,7 @@ to a GPIO, so when USB power is present the indicator shows **USB** instead of
 a percentage.
 
 To reduce steady-state power consumption and heat without compromising display
-updates, the firmware runs the ESP32 at 160 MHz, enables WiFi station modem
-sleep, and starts the TFT backlight at 50%. The
+updates, the firmware runs the ESP32 at 160 MHz and starts the TFT backlight at 50%. The
 backlight control can still raise it to 100%; previously saved browser
 preferences remain unchanged.
 
@@ -76,8 +75,7 @@ On battery, the backlight runs at half the level set in the app (50% becomes
 25%). It returns to the full level when USB power is plugged in, and the app
 still shows and saves the level you set.
 
-On battery, the T-Display-S3 also turns WiFi (both the network connection and
-the hotspot) fully off after 2 minutes without a command from the app. These
+On battery, the T-Display-S3 also turns WiFi (the hotspot) fully off after 2 minutes without a command from the app. These
 are the same actions that show up in the activity log, such as connecting,
 sending media, or changing the backlight. On battery or USB, WiFi also turns
 fully off when nothing has been connected to the board over WiFi for 60
@@ -85,7 +83,7 @@ seconds (no phone joined to the hotspot and no app connection); the countdown
 pauses while the hotspot QR codes are on screen. Saved media keeps playing
 while WiFi is off. To bring WiFi back, connect over USB, plug in USB power, hold **BOOT**
 for 1.5 seconds (the screen shows **WiFi on**), or wake the board from deep
-sleep. Your WiFi and hotspot settings are not changed.
+sleep. Your hotspot settings are not changed.
 
 ## How it works
 
@@ -99,7 +97,7 @@ Chrome / Edge PWA
   - preview and JPEG encode
   - schedule GIF frames
     │
-    │ Web Serial at 921600 baud, or a local WebSocket over WiFi
+    │ Web Serial at 921600 baud, or a WebSocket over the board's hotspot
     ▼
 ESP32 firmware
   - validate framed packets and CRC
@@ -150,7 +148,7 @@ argument must be newer than the version in `public/firmware/manifest.json`.
 
 The firmware dependencies are pinned in `firmware/platformio.ini`.
 
-The web installer has its own page (`/install.html`, **Install firmware** in the site's header). It reads `public/firmware/manifest.json`, lists every published version newest first with the newest marked **Latest**, checks that the connected chip is an ESP32-S3, and flashes the chosen prebuilt image after validating its metadata. It writes the bootloader, partition table, and application image without erasing the LittleFS media partition, and skips the NVS partition (read from the image's partition table) so WiFi credentials, hotspot settings and pairing tokens survive an update.
+The web installer has its own page (`/install.html`, **Install firmware** in the site's header). It reads `public/firmware/manifest.json`, lists every published version newest first with the newest marked **Latest**, checks that the connected chip is an ESP32-S3, and flashes the chosen prebuilt image after validating its metadata. It writes the bootloader, partition table, and application image without erasing the LittleFS media partition, and skips the NVS partition (read from the image's partition table) so hotspot settings survive an update.
 
 ## Quick start
 
@@ -249,11 +247,11 @@ When the device is full, an upload stops with "The device is full" and the items
 
 Press the board's **BOOT** button during normal operation to enter deep sleep and turn off the display. Press **BOOT** again to wake the board and resume persisted media. Deep sleep minimizes consumption but does not physically disconnect power. The **EN/RESET** button remains a hardware reset, and holding BOOT while resetting or connecting power still enters the ESP32 firmware-download mode.
 
-The normal 160 MHz CPU and WiFi modem-sleep settings keep USB, WiFi, and stored
+The normal 160 MHz CPU setting keeps USB, the hotspot, and stored
 media playback available. For the lowest consumption and coolest idle state,
 use the BOOT-button deep sleep mode.
 
-Hold **BOOT** for about two seconds during normal operation to toggle the hotspot between **Off** and its last enabled mode. A short press keeps the existing sleep behavior. The display shows which hotspot mode was selected.
+Hold **BOOT** for about two seconds during normal operation to turn the hotspot on or off. A short press keeps the existing sleep behavior. Turning it on shows the QR codes for joining it; turning it off shows **Hotspot off**.
 
 ## USB protocol
 
@@ -277,28 +275,17 @@ The handshake reports:
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) and `firmware/protocol.h` for the complete command/error definitions.
 
-## WiFi control
+## Phone upload over the hotspot
 
-WiFi is an additional, optional transport alongside USB - USB keeps working exactly as before. It is strictly local-network: the board joins your own WiFi and the browser talks to it directly at its local IP, with no cloud relay, no external server, and no background access.
+The board never joins your home network. For WiFi it hosts its own WPA2-protected hotspot, and the browser talks to it directly, with no cloud relay, no external server, and no background access.
 
-1. Connect over USB first, as above.
-2. Select **Set up WiFi**, and enter your network's name (SSID) and password. The web app sends these to the board over the existing USB connection.
-3. The board joins your network and reports its local IP address (and an `<name>.local` hostname) back over USB. On the very first pairing, it also issues a random 16-byte pairing token, which the web app stores in this browser only.
-4. Enter that IP address (or hostname) under **Connect over WiFi** and select **Connect over WiFi**. From then on, image/GIF upload, playlists, brightness, and clear/status all work the same way as over USB.
+1. Turn the hotspot on: hold **BOOT** for about two seconds, or select **Turn hotspot on** under **Device hotspot** in the desktop app while connected over USB.
+2. The screen shows a QR code with the hotspot's name and password. Scan it with the phone's camera to join the `CyberClip-......` network.
+3. Once the phone has joined, the screen switches to a second QR code that opens `http://192.168.4.1`. Each code hides after 60 seconds.
 
-The pairing token gates the WiFi connection so other devices on your network cannot control the display or read its status without it. Firmware updates remain USB-only. Select **Forget WiFi** over USB or an active LAN connection to have the board forget its network and pairing token; set up WiFi again afterward to issue a new one (for example, to pair a different browser with the same board).
+The hosted page supports image/GIF selection, exact preview and JPEG processing, fit, rotation, background, quality, backlight, timing, looping, persistence, clearing, and the **Saved media** panel. It intentionally contains no firmware installer or network setup controls.
 
-### ESP32-hosted phone page
-
-Connect to the board over USB and configure **Device hotspot** in the desktop app. Choose a mode and set a device-specific WPA2 password of 8-63 characters:
-
-- **Off** never starts the hotspot.
-- **Automatic fallback** starts it when home WiFi is not configured or cannot connect, and stops it after home WiFi recovers.
-- **Always on** keeps the hotspot available while the board may also remain connected to home WiFi.
-
-When the hotspot is running, join the displayed `Cyberclip-......` network from a phone and open `http://192.168.4.1`. The hosted page supports image/GIF selection, exact preview and JPEG processing, fit, rotation, background, quality, backlight, timing, looping, persistence, clearing, and the **Saved media** panel. It intentionally contains no firmware installer or network setup controls.
-
-The hotspot's WPA2 password is the access boundary for its self-hosted page. A WebSocket is accepted without the LAN pairing token only when the firmware observes that it arrived through the AP interface. Home-network WebSockets still require the random token issued during USB pairing. The password is stored on the device and is never returned to either web UI.
+The board makes up a random 12-character password on first boot and keeps it, so a phone that has joined once rejoins on its own. Boards updated from older firmware keep the password that was typed in before. The password is never sent to either web UI; it only appears in the on-screen QR code. That password is the access boundary for the hosted page: a WebSocket is accepted only when the firmware sees it arrive through the hotspot interface. Firmware updates remain USB-only.
 
 ## iPhone now playing (Bluetooth)
 
@@ -375,7 +362,7 @@ src/
   flasher.js         Firmware manifest, version list, and flashing over Web Serial
   site.css           Desktop-site styles (header nav, version picker)
   serial.js          Web Serial lifecycle
-  wifiTransport.js   WebSocket lifecycle (mirrors serial.js) for WiFi control
+  wifiTransport.js   WebSocket lifecycle (mirrors serial.js) for the hotspot page
   protocol.js        Framing, CRC, commands, payload helpers
   images.js          Resize, fit, preview, JPEG encoding
   gifs.js            GIF validation, compositing, timing
@@ -389,7 +376,7 @@ firmware/
   protocol.h
   platformio.ini
   src/
-    wifi_manager.h/.cpp   WiFi credentials, pairing token, connection lifecycle
+    wifi_manager.h/.cpp   Hotspot setting, generated password, lifecycle
     ws_server.h/.cpp      WebSocket transport carrying the same binary protocol
     ble_media.h/.cpp      iPhone now-playing over BLE (Apple Media Service)
   ams.h                   AMS constants and notification parsing

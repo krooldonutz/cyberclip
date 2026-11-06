@@ -6,18 +6,17 @@
 namespace cyberclip {
 
 // Minimal WiFi transport for the CyberClip binary protocol: a WebSocket
-// endpoint that carries the exact same framed packets as USB serial.
+// endpoint on the board's hotspot that carries the exact same framed packets
+// as USB serial.
 //
-// Only one WebSocket client is accepted at a time. Station-side clients must
-// send the 16-byte pairing token as their first binary message. AP-side
-// clients are identified from the TCP socket's local endpoint (192.168.4.1)
-// and authorize with an empty first message. Trust is never based on headers
-// or a client-supplied host.
+// Only one WebSocket client is accepted at a time. Clients are identified as
+// hotspot clients from the TCP socket's local endpoint (192.168.4.1) and
+// authorize with an empty first message; the hotspot's WPA2 password is the
+// access boundary. Trust is never based on headers or a client-supplied host.
 // This keeps all protocol parsing/handling on the single main-loop task,
 // since AsyncWebServer's callbacks run on a different task.
 //
-// wsServerBegin() must only be called after STA or AP networking has been
-// enabled. Starting the listener before LWIP's tcpip task exists crashes with
+// wsServerBegin() must only be called after the AP has been enabled. Starting the listener before LWIP's tcpip task exists crashes with
 // an "Invalid mbox" assertion. It is idempotent; wsServerPoll()/wsReadByte()
 // are safe even before the server has started.
 void wsServerBegin();
@@ -34,7 +33,7 @@ void wsSendFrame(const uint8_t *data, size_t length);
 // or an AP-side HTTP asset transfer has run recently.
 bool wsHasActiveApClientOrTransfer();
 
-// True while any WebSocket client (station or hotspot side) is connected.
+// True while a WebSocket client is connected.
 bool wsHasClient();
 
 }  // namespace cyberclip

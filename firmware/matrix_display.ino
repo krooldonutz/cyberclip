@@ -1325,7 +1325,7 @@ void drawHotspotQr() {
       char payload[7 + 2 * kWifiMaxSsidLength + 9 +
                    2 * kHotspotMaxPasswordLength + 3];
       if (!wifiManager.formatHotspotJoinQr(payload, sizeof(payload))) {
-        drawHotspotQrLabel("Set AP password", display.height() / 2, 2);
+        drawHotspotQrLabel("QR unavailable", display.height() / 2, 2);
         break;
       }
       drawHotspotQrLabel("Scan to join", topLabelY, 2);
@@ -1386,15 +1386,6 @@ void pollHotspotQr() {
   }
 }
 
-void showHotspotButtonFeedback(uint8_t previousMode) {
-  const HotspotStatus status = wifiManager.hotspotStatus();
-  if (status.mode != previousMode) {
-    showButtonMessage(status.mode == HOTSPOT_OFF ? "Hotspot off" : "Hotspot on");
-  } else {
-    showButtonMessage("Set AP password");
-  }
-}
-
 void pollButton(gpio_num_t pin, ButtonState &button) {
   const bool pressed = digitalRead(pin) == LOW;
   if (!button.armed) {
@@ -1419,17 +1410,15 @@ void pollButton(gpio_num_t pin, ButtonState &button) {
       noteActivity();
       showButtonMessage("WiFi on");
     } else {
-      const uint8_t previousMode = wifiManager.hotspotStatus().mode;
       wifiManager.toggleHotspotMode();
       const HotspotStatus status = wifiManager.hotspotStatus();
-      if (status.mode != previousMode && status.mode != HOTSPOT_OFF) {
-        // Turned on: show how to join (a fallback hotspot may still be
-        // waiting for the home network to give up).
+      if (status.mode != HOTSPOT_OFF) {
+        // Turned on: show how to join.
         noteActivity();
         showHotspotQr(status.running ? HotspotQrStage::kJoin
                                      : HotspotQrStage::kWaiting);
       } else {
-        showHotspotButtonFeedback(previousMode);
+        showButtonMessage("Hotspot off");
       }
     }
     button.longHandled = true;
@@ -2125,27 +2114,6 @@ void sendStatus(uint16_t sequence) {
   writeFrame(STATUS_RESPONSE, sequence, payload, sizeof(payload));
 }
 
-void sendWifiStatus(uint16_t sequence, bool tokenIncluded,
-                    const uint8_t *token) {
-  const WifiStatus wifiStatus = wifiManager.status();
-  const size_t hostnameLength = strlen(wifiStatus.hostname);
-  uint8_t payload[1 + 4 + 1 + sizeof(wifiStatus.hostname) - 1 + 1 +
-                  kWifiTokenSize];
-  size_t offset = 0;
-  payload[offset++] = wifiStatus.state;
-  memcpy(payload + offset, wifiStatus.ip, sizeof(wifiStatus.ip));
-  offset += sizeof(wifiStatus.ip);
-  payload[offset++] = static_cast<uint8_t>(hostnameLength);
-  memcpy(payload + offset, wifiStatus.hostname, hostnameLength);
-  offset += hostnameLength;
-  payload[offset++] = tokenIncluded ? 1 : 0;
-  if (tokenIncluded && token) {
-    memcpy(payload + offset, token, kWifiTokenSize);
-    offset += kWifiTokenSize;
-  }
-  writeFrame(WIFI_STATUS_RESPONSE, sequence, payload, offset);
-}
-
 void sendHotspotStatus(uint16_t sequence) {
   const HotspotStatus hotspotStatus = wifiManager.hotspotStatus();
   const size_t ssidLength = strlen(hotspotStatus.ssid);
@@ -2710,83 +2678,22 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
       }
       return;
 
-    case SET_WIFI_CREDENTIALS: {
-      if (currentReplyTarget != ReplyTarget::kSerial || length < 2) {
-        sendNack(sequence, command, INVALID_PAYLOAD);
-        return;
-      }
-      const uint8_t ssidLength = payload[0];
-      if (ssidLength == 0 || ssidLength > kWifiMaxSsidLength ||
-          length < static_cast<uint32_t>(1 + ssidLength + 1)) {
-        sendNack(sequence, command, INVALID_PAYLOAD);
-        return;
-      }
-      const uint8_t passwordLength = payload[1 + ssidLength];
-      if (passwordLength > kWifiMaxPasswordLength ||
-          length != static_cast<uint32_t>(1 + ssidLength + 1 + passwordLength)) {
-        sendNack(sequence, command, INVALID_PAYLOAD);
-        return;
-      }
-      char ssid[kWifiMaxSsidLength + 1] = {};
-      char password[kWifiMaxPasswordLength + 1] = {};
-      memcpy(ssid, payload + 1, ssidLength);
-      memcpy(password, payload + 1 + ssidLength + 1, passwordLength);
-      uint8_t token[kWifiTokenSize];
-      bool tokenIncluded = false;
-      if (!wifiManager.setCredentials(ssid, password, token, &tokenIncluded)) {
-        sendNack(sequence, command, INVALID_PAYLOAD);
-        return;
-      }
-      sendWifiStatus(sequence, tokenIncluded, token);
-      return;
-    }
-
-    case GET_WIFI_STATUS:
-      if (length != 0) sendNack(sequence, command, INVALID_PAYLOAD);
-      else sendWifiStatus(sequence, false, nullptr);
-      return;
-
-    case CLEAR_WIFI_CREDENTIALS:
-      if (length != 0) {
-        sendNack(sequence, command, INVALID_PAYLOAD);
-      } else {
-        // A station-side WebSocket may be carrying this command.
-        sendAck(sequence, command);
-        wifiManager.clearCredentials();
-      }
-      return;
-
-    case SET_WIFI_ENABLED:
-      if (length != 1) {
-        sendNack(sequence, command, INVALID_PAYLOAD);
-      } else {
-        const bool enabled = payload[0] != 0;
-        if (!enabled) sendAck(sequence, command);
-        wifiManager.setEnabled(enabled);
-        if (enabled) sendAck(sequence, command);
-      }
-      return;
-
     case SET_HOTSPOT_CONFIG: {
-      if (currentReplyTarget != ReplyTarget::kSerial || length < 2) {
+      const uint8_t previousMode = wifiManager.hotspotStatus().mode;
+      if (currentReplyTarget != ReplyTarget::kSerial || length != 1 ||
+          !wifiManager.setHotspotMode(payload[0])) {
         sendNack(sequence, command, INVALID_PAYLOAD);
         return;
       }
-      const uint8_t mode = payload[0];
-      const uint8_t passwordLength = payload[1];
-      if (!isValidHotspotMode(mode) ||
-          length != static_cast<uint32_t>(2 + passwordLength) ||
-          (passwordLength != 0 &&
-           !isValidHotspotPasswordLength(passwordLength))) {
-        sendNack(sequence, command, INVALID_PAYLOAD);
-        return;
-      }
-      char password[kHotspotMaxPasswordLength + 1] = {};
-      memcpy(password, payload + 2, passwordLength);
-      if (!wifiManager.setHotspotConfig(mode, password, passwordLength)) {
-        sendNack(sequence, command, INVALID_PAYLOAD);
-      } else {
-        sendHotspotStatus(sequence);
+      sendHotspotStatus(sequence);
+      // As with a BOOT hold: turning it on shows how to join, and turning
+      // it off takes the codes down.
+      const HotspotStatus status = wifiManager.hotspotStatus();
+      if (status.mode == HOTSPOT_OFF) {
+        hideHotspotQr();
+      } else if (previousMode == HOTSPOT_OFF) {
+        showHotspotQr(status.running ? HotspotQrStage::kJoin
+                                     : HotspotQrStage::kWaiting);
       }
       return;
     }

@@ -39,15 +39,13 @@ Open the localhost URL printed by Vite in desktop Chrome or Edge.
 
 ## 5. Upload from a phone
 
-1. Connect through USB in the desktop app.
-2. Under **Device hotspot**, select **Automatic fallback** or **Always on**.
-3. Enter an 8-63 character WPA2 password and select **Save hotspot**.
-4. Join the displayed `Cyberclip-......` WiFi network from your phone.
-5. Open `http://192.168.4.1`, choose an image or GIF, adjust it, and upload it.
+1. Hold BOOT for about two seconds (or select **Turn hotspot on** under **Device hotspot** in the desktop app over USB).
+2. Scan the QR code on the screen with your phone's camera to join the `CyberClip-......` WiFi network.
+3. Scan the second QR code to open `http://192.168.4.1`, choose an image or GIF, adjust it, and upload it.
 
 The phone performs image resizing, GIF compositing, JPEG encoding, and transfer scheduling. Firmware installation remains available only from the desktop app over USB.
 
-A short BOOT press keeps the existing sleep/wake behavior. Hold BOOT for about two seconds to switch the hotspot between **Off** and its last enabled mode.
+A short BOOT press keeps the existing sleep/wake behavior. Hold BOOT for about two seconds to turn the hotspot on or off.
 
 Leave **Keep media on device** enabled to store the result in onboard flash. A saved image is restored after restart; a saved GIF plays from the ESP32 without the browser or USB data connection. GIFs are limited to 255 frames. Each saved upload is added to the **Saved media** panel (up to 16 items), where you can show or delete items. **Stop** cancels playback and any incomplete transfer, while **Delete all saved media** erases everything saved.
 

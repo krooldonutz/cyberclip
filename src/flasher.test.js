@@ -348,7 +348,7 @@ function mergedImage(length = 0x10010) {
 }
 
 describe('flash segments', () => {
-  it('leaves the NVS partition (WiFi settings) out of the write', () => {
+  it('leaves the NVS partition (hotspot settings) out of the write', () => {
     const image = mergedImage();
     const segments = flashSegments(image);
     expect(segments.map(({ address, data }) => [address, data.length])).toEqual([

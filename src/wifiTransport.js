@@ -3,7 +3,6 @@ import {
   PacketDecoder,
   PROTOCOL_VERSION,
   ProtocolError,
-  WIFI_TOKEN_SIZE,
   encodePacket,
   parseHelloResponse,
   parseNack,
@@ -13,10 +12,10 @@ const REQUEST_TIMEOUT_MS = 8000;
 
 // WifiTransport mirrors SerialTransport's connect/request/disconnect shape
 // so app.js can use either transport interchangeably. It carries the same
-// framed protocol packets as USB serial, over a WebSocket to the device's
-// local IP - see firmware/src/ws_server.h. Unlike Web Serial, opening it
-// needs no user gesture, so it can be attempted automatically for a
-// remembered device.
+// framed protocol packets as USB serial, over a WebSocket to the board's
+// hotspot - see firmware/src/ws_server.h. The page the board hosts uses it;
+// joining the hotspot's WPA2 network is the only access check, so it opens
+// with an empty authorization message.
 export class WifiTransport {
   constructor({
     WebSocketImpl = globalThis.WebSocket,
@@ -38,19 +37,11 @@ export class WifiTransport {
     return Boolean(this.socket) && this.socket.readyState === this.WebSocketImpl.OPEN;
   }
 
-  async connect({
-    host,
-    token,
-    trustedDevicePage = false,
-    timeoutMs = REQUEST_TIMEOUT_MS,
-  } = {}) {
+  async connect({ host, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
     if (!this.WebSocketImpl) {
       throw new Error('WebSocket is not available in this browser');
     }
     if (!host) throw new Error('A device IP address or hostname is required');
-    if (!trustedDevicePage && (!token || token.byteLength !== WIFI_TOKEN_SIZE)) {
-      throw new Error('A WiFi pairing token is required. Pair over USB first.');
-    }
     if (this.socket) await this.disconnect();
 
     this.disconnecting = false;
@@ -58,11 +49,7 @@ export class WifiTransport {
     this.onStateChange('connecting');
 
     const socket = await this.openSocket(host);
-    if (trustedDevicePage) {
-      socket.send(new Uint8Array());
-    } else {
-      socket.send(token);
-    }
+    socket.send(new Uint8Array());
     this.socket = socket;
     this.socket.addEventListener('message', (event) => this.handleMessage(event));
     this.socket.addEventListener('close', () => {

@@ -125,22 +125,6 @@ h2 {
   line-height: 1.45;
 }
 
-.hotspot-controls {
-  display: grid;
-  grid-template-columns: minmax(160px, 1fr) minmax(220px, 1fr) auto;
-  align-items: end;
-  gap: 12px;
-  margin-top: 16px;
-}
-
-.hotspot-controls label {
-  display: grid;
-  gap: 8px;
-  color: #cbd5e1;
-  font-size: 0.86rem;
-  font-weight: 700;
-}
-
 input[type="password"],
 input[type="text"] {
   width: 100%;
@@ -716,10 +700,6 @@ progress::-webkit-progress-value {
   .log-entry {
     grid-template-columns: 64px minmax(0, 1fr);
     gap: 8px;
-  }
-
-  .hotspot-controls {
-    grid-template-columns: 1fr;
   }
 
   .toast-region {

@@ -158,7 +158,7 @@ export async function resolveDownloadPort(port, {
 }
 
 // Splits a merged image (written at address 0) into the pieces to flash,
-// leaving out NVS partitions so WiFi and hotspot settings survive an update.
+// leaving out NVS partitions so hotspot settings survive an update.
 // The merged image fills the gap before the app with 0xFF, which would
 // otherwise erase them.
 export function flashSegments(image) {
