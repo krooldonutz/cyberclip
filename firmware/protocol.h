@@ -69,6 +69,10 @@ enum Command : uint8_t {
   // stored password returns INVALID_PAYLOAD.
   SET_HOTSPOT_CONFIG = 0x44,
   GET_HOTSPOT_STATUS = 0x45,
+  // TURN_OFF_HOTSPOT: no payload. Replies ACK, then sets the hotspot mode to
+  // off (as a BOOT hold does, so the next hold brings it back). Allowed from
+  // the hotspot page, whose phone it drops once its connection closes.
+  TURN_OFF_HOTSPOT = 0x46,
   HELLO_RESPONSE = 0x81,
   STATUS_RESPONSE = 0xA2,
   // WIFI_STATUS_RESPONSE: state u8, ipv4 4 bytes, hostnameLength u8,
@@ -475,6 +479,93 @@ inline uint8_t nextStoredSlot(const bool used[kMaxStoredItems], uint8_t from) {
     if (used[slot]) return slot;
   }
   return kNoStoredSlot;
+}
+
+// Hotspot QR codes. Turning the hotspot on with a BOOT hold shows a QR code
+// that joins its network; once a phone has joined, a second one opens the
+// upload page. The first holds the hotspot password, so both only appear
+// after that button press and hide on their own.
+enum class HotspotQrStage : uint8_t {
+  kHidden,
+  kWaiting,   // Hotspot turned on but not running yet (fallback mode).
+  kJoin,      // WIFI: code with the network name and password.
+  kOpenPage,  // http://192.168.4.1/ code.
+};
+
+constexpr uint32_t kHotspotQrWaitMs = 20000;
+constexpr uint32_t kHotspotQrShowMs = 60000;
+constexpr char kHotspotPageUrl[] = "http://192.168.4.1/";
+
+// The stage after *stage*, which has been showing for *stageAgeMs*. The
+// caller restarts the age whenever the stage changes.
+inline HotspotQrStage nextHotspotQrStage(HotspotQrStage stage,
+                                         uint32_t stageAgeMs,
+                                         bool hotspotRunning,
+                                         uint8_t stationCount) {
+  switch (stage) {
+    case HotspotQrStage::kHidden:
+      return HotspotQrStage::kHidden;
+    case HotspotQrStage::kWaiting:
+      if (hotspotRunning) {
+        return stationCount > 0 ? HotspotQrStage::kOpenPage
+                                : HotspotQrStage::kJoin;
+      }
+      return stageAgeMs >= kHotspotQrWaitMs ? HotspotQrStage::kHidden
+                                            : HotspotQrStage::kWaiting;
+    case HotspotQrStage::kJoin:
+      if (!hotspotRunning) return HotspotQrStage::kHidden;
+      if (stationCount > 0) return HotspotQrStage::kOpenPage;
+      return stageAgeMs >= kHotspotQrShowMs ? HotspotQrStage::kHidden
+                                            : HotspotQrStage::kJoin;
+    case HotspotQrStage::kOpenPage:
+      if (!hotspotRunning || stageAgeMs >= kHotspotQrShowMs) {
+        return HotspotQrStage::kHidden;
+      }
+      return HotspotQrStage::kOpenPage;
+  }
+  return HotspotQrStage::kHidden;
+}
+
+// Appends *text* to *out* with the characters the WIFI: QR format reserves
+// (\ ; , : ") escaped by a backslash. Returns false if it does not fit.
+inline bool appendWifiQrEscaped(char *out, size_t outSize, size_t *length,
+                                const char *text) {
+  for (const char *c = text; *c; ++c) {
+    const bool reserved = *c == '\\' || *c == ';' || *c == ',' || *c == ':' ||
+                          *c == '"';
+    const size_t needed = reserved ? 2 : 1;
+    if (*length + needed >= outSize) return false;
+    if (reserved) out[(*length)++] = '\\';
+    out[(*length)++] = *c;
+  }
+  out[*length] = '\0';
+  return true;
+}
+
+// Writes WIFI:S:<ssid>;T:WPA;P:<password>;; to *out*, the text a phone
+// camera reads as "join this network". Returns its length, or 0 if it does
+// not fit in *outSize* bytes.
+inline size_t formatWifiQrPayload(char *out, size_t outSize, const char *ssid,
+                                  const char *password) {
+  if (!out || outSize == 0 || !ssid || !password) return 0;
+  size_t length = 0;
+  out[0] = '\0';
+  auto appendRaw = [&](const char *text) {
+    const size_t textLength = strlen(text);
+    if (length + textLength >= outSize) return false;
+    memcpy(out + length, text, textLength + 1);
+    length += textLength;
+    return true;
+  };
+  if (!appendRaw("WIFI:S:") ||
+      !appendWifiQrEscaped(out, outSize, &length, ssid) ||
+      !appendRaw(";T:WPA;P:") ||
+      !appendWifiQrEscaped(out, outSize, &length, password) ||
+      !appendRaw(";;")) {
+    out[0] = '\0';
+    return 0;
+  }
+  return length;
 }
 
 }  // namespace cyberclip

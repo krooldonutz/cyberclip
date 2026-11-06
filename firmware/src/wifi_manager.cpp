@@ -191,6 +191,11 @@ void WifiManager::toggleHotspotMode() {
   persistHotspotMode();
 }
 
+void WifiManager::turnOffHotspot() {
+  if (hotspotMode_ == HOTSPOT_OFF) return;
+  toggleHotspotMode();
+}
+
 void WifiManager::suspend() {
   if (suspended_) return;
   suspended_ = true;
@@ -308,6 +313,15 @@ HotspotStatus WifiManager::hotspotStatus() const {
     for (size_t i = 0; i < 4; ++i) result.ip[i] = ip[i];
   }
   return result;
+}
+
+uint8_t WifiManager::hotspotStationCount() const {
+  return hotspotRunning_ ? WiFi.softAPgetStationNum() : 0;
+}
+
+bool WifiManager::formatHotspotJoinQr(char *out, size_t outSize) const {
+  if (hotspotPassword_[0] == '\0') return false;
+  return formatWifiQrPayload(out, outSize, hotspotSsid_, hotspotPassword_) > 0;
 }
 
 bool WifiManager::checkToken(const uint8_t *token, size_t length) const {

@@ -38,6 +38,9 @@ class WifiManager {
   bool setHotspotConfig(uint8_t mode, const char *password,
                         size_t passwordLength);
   void toggleHotspotMode();
+  // Sets the hotspot mode to off, remembering the old mode for the next
+  // toggle. The hotspot itself stops once no phone is mid-upload.
+  void turnOffHotspot();
 
   // Turns the radio fully off (station and hotspot) without changing any
   // stored settings; resume() brings back whatever those settings ask for.
@@ -47,6 +50,11 @@ class WifiManager {
 
   WifiStatus status() const;
   HotspotStatus hotspotStatus() const;
+  // Phones currently joined to the hotspot (0 while it is not running).
+  uint8_t hotspotStationCount() const;
+  // Writes the WIFI: QR text for joining the hotspot, which includes its
+  // password. Returns false when no password is set or it does not fit.
+  bool formatHotspotJoinQr(char *out, size_t outSize) const;
   bool checkToken(const uint8_t *token, size_t length) const;
 
  private:

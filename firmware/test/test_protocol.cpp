@@ -139,6 +139,64 @@ void test_stored_item_position() {
   TEST_ASSERT_FALSE(storedItemPosition(used, 2, &position, &count));
 }
 
+void test_wifi_qr_payload() {
+  char out[128];
+  TEST_ASSERT_EQUAL_UINT32(
+      strlen("WIFI:S:CyberClip-ABC123;T:WPA;P:secret123;;"),
+      formatWifiQrPayload(out, sizeof(out), "CyberClip-ABC123", "secret123"));
+  TEST_ASSERT_EQUAL_STRING("WIFI:S:CyberClip-ABC123;T:WPA;P:secret123;;", out);
+
+  formatWifiQrPayload(out, sizeof(out), "a;b", "p\\a:s,s\"");
+  TEST_ASSERT_EQUAL_STRING("WIFI:S:a\\;b;T:WPA;P:p\\\\a\\:s\\,s\\\";;", out);
+
+  // Too small: nothing is written, not a cut-off code.
+  char tiny[20];
+  TEST_ASSERT_EQUAL_UINT32(
+      0, formatWifiQrPayload(tiny, sizeof(tiny), "CyberClip-ABC123", "pw"));
+  TEST_ASSERT_EQUAL_STRING("", tiny);
+  // Exactly fits (26 characters plus the terminator), one byte less does not.
+  char exact[27];
+  TEST_ASSERT_EQUAL_UINT32(
+      26, formatWifiQrPayload(exact, sizeof(exact), "abcd", "efgh"));
+  TEST_ASSERT_EQUAL_UINT32(
+      0, formatWifiQrPayload(exact, sizeof(exact) - 1, "abcd", "efgh"));
+
+  // The longest hotspot password, all reserved characters, still fits the
+  // firmware's buffer.
+  char password[kHotspotMaxPasswordLength + 1];
+  memset(password, ';', kHotspotMaxPasswordLength);
+  password[kHotspotMaxPasswordLength] = '\0';
+  char big[7 + 2 * kWifiMaxSsidLength + 9 + 2 * kHotspotMaxPasswordLength + 3];
+  TEST_ASSERT_TRUE(formatWifiQrPayload(big, sizeof(big),
+                                       "CyberClip-ABC123", password) > 0);
+}
+
+void test_hotspot_qr_stages() {
+  using S = HotspotQrStage;
+  TEST_ASSERT_TRUE(S::kHidden == nextHotspotQrStage(S::kHidden, 0, true, 1));
+
+  // Waiting for a fallback hotspot to start.
+  TEST_ASSERT_TRUE(S::kWaiting == nextHotspotQrStage(S::kWaiting, 0, false, 0));
+  TEST_ASSERT_TRUE(S::kJoin == nextHotspotQrStage(S::kWaiting, 5, true, 0));
+  TEST_ASSERT_TRUE(S::kOpenPage == nextHotspotQrStage(S::kWaiting, 5, true, 1));
+  TEST_ASSERT_TRUE(S::kHidden == nextHotspotQrStage(S::kWaiting,
+                                                    kHotspotQrWaitMs, false, 0));
+
+  // Join code: moves on once a phone joins, hides on timeout or hotspot off.
+  TEST_ASSERT_TRUE(S::kJoin == nextHotspotQrStage(S::kJoin, 1000, true, 0));
+  TEST_ASSERT_TRUE(S::kOpenPage == nextHotspotQrStage(S::kJoin, 1000, true, 2));
+  TEST_ASSERT_TRUE(S::kHidden == nextHotspotQrStage(S::kJoin,
+                                                    kHotspotQrShowMs, true, 0));
+  TEST_ASSERT_TRUE(S::kHidden == nextHotspotQrStage(S::kJoin, 0, false, 0));
+
+  // Page code.
+  TEST_ASSERT_TRUE(S::kOpenPage ==
+                   nextHotspotQrStage(S::kOpenPage, kHotspotQrShowMs - 1, true, 1));
+  TEST_ASSERT_TRUE(S::kHidden ==
+                   nextHotspotQrStage(S::kOpenPage, kHotspotQrShowMs, true, 1));
+  TEST_ASSERT_TRUE(S::kHidden == nextHotspotQrStage(S::kOpenPage, 0, false, 1));
+}
+
 void test_battery_button_hold() {
   TEST_ASSERT_FALSE(isBatteryButtonHeld(1000, 1000));
   TEST_ASSERT_FALSE(isBatteryButtonHeld(1000, 1499));
@@ -166,6 +224,7 @@ void test_wifi_command_bytes_do_not_collide() {
   TEST_ASSERT_EQUAL_HEX8(0x43, SET_WIFI_ENABLED);
   TEST_ASSERT_EQUAL_HEX8(0x44, SET_HOTSPOT_CONFIG);
   TEST_ASSERT_EQUAL_HEX8(0x45, GET_HOTSPOT_STATUS);
+  TEST_ASSERT_EQUAL_HEX8(0x46, TURN_OFF_HOTSPOT);
   TEST_ASSERT_EQUAL_HEX8(0xA3, WIFI_STATUS_RESPONSE);
   TEST_ASSERT_EQUAL_HEX8(0xA4, HOTSPOT_STATUS_RESPONSE);
   TEST_ASSERT_EQUAL_UINT8(16, kWifiTokenSize);
@@ -424,6 +483,8 @@ void runTests() {
   RUN_TEST(test_stored_media_command_bytes);
   RUN_TEST(test_stored_item_position);
   RUN_TEST(test_battery_button_hold);
+  RUN_TEST(test_wifi_qr_payload);
+  RUN_TEST(test_hotspot_qr_stages);
   RUN_TEST(test_wifi_command_bytes_do_not_collide);
   RUN_TEST(test_hotspot_validation_and_fallback_policy);
   RUN_TEST(test_power_policy);
