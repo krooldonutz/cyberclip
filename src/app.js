@@ -14,9 +14,10 @@ import {
   createHotspotConfigPayload,
   parseHotspotStatusResponse,
 } from './protocol.js';
+import { confirmAction } from './confirmDialog.js';
 import { SerialTransport } from './serial.js';
 import { registerServiceWorker } from './serviceWorker.js';
-import { StoredMediaView, uploadErrorHint } from './storedMedia.js';
+import { DELETE_ALL_CONFIRMATION, StoredMediaView, uploadErrorHint } from './storedMedia.js';
 
 const DEFAULT_CAPABILITIES = {
   width: 170,
@@ -544,7 +545,7 @@ async function clearDisplay() {
 }
 
 async function removeStoredMedia() {
-  if (!globalThis.confirm('Delete everything saved on the device? This cannot be undone.')) return;
+  if (!(await confirmAction(DELETE_ALL_CONFIRMATION))) return;
   try {
     await serialTransport.request(Command.CLEAR_STORED, new Uint8Array(), { timeoutMs: 30000 });
     await serialTransport.request(Command.CLEAR_DISPLAY, createClearPayload(0));

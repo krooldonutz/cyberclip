@@ -272,8 +272,8 @@ describe('StoredMediaView', () => {
   it('shows another item and deletes after confirmation', async () => {
     const state = twoItems();
     const transport = libraryTransport(state);
-    const confirm = vi.fn(() => true);
-    const view = createView(transport, { confirm });
+    const askToConfirm = vi.fn(async () => true);
+    const view = createView(transport, { askToConfirm });
     await view.refresh();
 
     await view.show(0);
@@ -282,13 +282,16 @@ describe('StoredMediaView', () => {
     expect(elements.list.querySelector('[data-slot="0"]').hasAttribute('data-active')).toBe(true);
 
     await view.remove(2);
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('saved GIF'));
+    expect(askToConfirm).toHaveBeenCalledWith(expect.objectContaining({
+      title: expect.stringContaining('saved GIF'),
+      destructive: true,
+    }));
     expect(elements.list.querySelectorAll('.library-item')).toHaveLength(1);
   });
 
   it('does not delete when the confirmation is declined', async () => {
     const transport = libraryTransport(twoItems());
-    const view = createView(transport, { confirm: () => false });
+    const view = createView(transport, { askToConfirm: async () => false });
     await view.refresh();
 
     await view.remove(0);
