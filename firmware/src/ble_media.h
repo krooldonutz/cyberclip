@@ -1,5 +1,12 @@
 #pragma once
 
+// Bluetooth (iPhone now playing) is a build-time switch, set in
+// platformio.ini. When 0, none of the BLE code or the NimBLE stack is built
+// into the firmware, so it can only be turned on by flashing new firmware.
+#ifndef CYBERCLIP_BLE_MEDIA
+#define CYBERCLIP_BLE_MEDIA 0
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
 

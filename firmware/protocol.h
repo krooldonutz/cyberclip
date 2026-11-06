@@ -244,18 +244,24 @@ inline bool shouldSuspendWifi(bool onBattery, bool transferActive,
 }
 
 constexpr uint32_t kLoopIdleSleepMs = 1;
+// Longest idle sleep on battery while the CPU runs at the reduced clock.
+// Short enough that the buttons still feel instant.
+constexpr uint32_t kBatteryIdleSleepMs = 20;
 
-// How long the main loop may sleep after a pass. It never sleeps while bytes
-// are arriving or a transfer is open, or when the next GIF frame is due
-// within the sleep, so frames stay on their deadlines.
+// How long the main loop may sleep after a pass, at most *maxSleepMs*. It
+// never sleeps while bytes are arriving or a transfer is open, and a playing
+// GIF wakes at least 1 ms before its next frame, so frames stay on their
+// deadlines.
 inline uint32_t loopIdleSleepMs(bool busy, bool playbackRunning,
-                                int32_t msUntilNextFrame) {
+                                int32_t msUntilNextFrame,
+                                uint32_t maxSleepMs = kLoopIdleSleepMs) {
   if (busy) return 0;
-  if (playbackRunning &&
-      msUntilNextFrame <= static_cast<int32_t>(kLoopIdleSleepMs)) {
-    return 0;
+  if (playbackRunning) {
+    if (msUntilNextFrame <= 1) return 0;
+    const uint32_t untilFrame = static_cast<uint32_t>(msUntilNextFrame) - 1;
+    return untilFrame < maxSleepMs ? untilFrame : maxSleepMs;
   }
-  return kLoopIdleSleepMs;
+  return maxSleepMs;
 }
 
 inline size_t playlistMetadataSize(uint8_t frameCount) {
