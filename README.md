@@ -170,6 +170,26 @@ npm run preview
 
 The deployable static site is written to `dist/`. Deploy it at the origin root on an HTTPS host. The service worker caches same-origin application assets after first use so the installed app can launch offline; serial data and selected media are never cached.
 
+### Staging and production
+
+The site is hosted on Vercel, which deploys every push. Production only moves when a version is released:
+
+| Environment | Vercel environment | Deploys from | URL |
+|---|---|---|---|
+| Production | Production | the `production` branch | https://cyberclip.vercel.app |
+| Staging | Preview | `main` | main's branch URL, shown on its deployment in Vercel |
+| Pull requests | Preview | the PR branch | posted on the pull request by Vercel |
+
+Merging a pull request updates staging, including the firmware the staging installer flashes. To ship what is on staging, publish a GitHub release tagged with the firmware version in `public/firmware/manifest.json`:
+
+```powershell
+gh release create v2.0.26 --target main --generate-notes
+```
+
+The [Release workflow](.github/workflows/release.yml) checks that the tag matches that version and is on `main`, points `production` at it, and Vercel deploys it. Pre-releases stay on staging. To roll back, run the workflow from the Actions tab with an older tag. Do not push to `production` by hand.
+
+This needs the Vercel project's production branch set to `production` (**Settings → Environments → Production → Branch Tracking**).
+
 ### Running the tests
 
 The web app tests run with Vitest:

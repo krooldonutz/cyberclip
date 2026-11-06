@@ -1,0 +1,60 @@
+name: Release
+
+# Production follows releases, not main. Vercel deploys its Production
+# environment (https://cyberclip.vercel.app) from the `production` branch, and
+# every other push, main included, becomes a Preview deployment. main's
+# preview is staging.
+#
+# Publishing a GitHub release tagged v<firmware version> points `production`
+# at the tagged commit, which makes Vercel deploy that commit to production.
+# Running this workflow by hand with an older tag rolls production back.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to put on production, for example v2.0.26
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    # Pre-releases stay on staging.
+    if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check the tag matches the firmware it ships
+        run: |
+          git rev-parse --verify --quiet "refs/tags/$TAG^{commit}" > /dev/null || {
+            echo "::error::Tag $TAG does not exist."
+            exit 1
+          }
+          manifest_version=$(git show "$TAG:public/firmware/manifest.json" | jq -r .version)
+          if [ "$TAG" != "v$manifest_version" ]; then
+            echo "::error::Tag $TAG does not match the firmware version $manifest_version at that commit. Tag the release v$manifest_version."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$TAG" origin/main; then
+            echo "::error::Tag $TAG is not on main. Release only commits that have been on staging."
+            exit 1
+          fi
+
+      - name: Point production at ${{ env.TAG }}
+        run: |
+          commit=$(git rev-parse "$TAG^{commit}")
+          # Force, so releasing an older tag rolls production back.
+          git push --force origin "$commit:refs/heads/production"
+          echo "production -> $TAG ($commit)" >> "$GITHUB_STEP_SUMMARY"
