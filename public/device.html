@@ -15,6 +15,7 @@
       </div>
       <div class="button-row">
         <span id="connection-pill" class="pill pill-offline">Connecting</span>
+        <button id="retry-button" class="button button-secondary" hidden>Reconnect</button>
         <button id="disconnect-button" class="button button-danger" disabled hidden title="Disconnect and turn off the Cyberclip Wi-Fi">Disconnect</button>
       </div>
     </header>
@@ -117,14 +118,15 @@
         <ul id="library-list" class="library-list"></ul>
       </section>
 
-      <section class="panel activity-panel">
-        <div class="section-heading">
+      <details class="panel activity-panel activity-collapsible">
+        <summary class="section-heading">
           <div><p class="eyebrow">Diagnostics</p><h2>Activity</h2></div>
-          <button id="retry-button" class="button button-secondary">Reconnect</button>
-        </div>
-        <div id="activity-log" class="activity-log" aria-live="polite"></div>
-      </section>
+          <span id="activity-count" class="pill">0</span>
+        </summary>
+        <div id="activity-log" class="activity-log"></div>
+      </details>
     </main>
+    <div id="toast-region" class="toast-region" role="status" aria-live="polite"></div>
     <template id="log-template"><div class="log-entry"><time></time><span></span></div></template>
     <script type="module" src="/src/deviceApp.js"></script>
   </body>

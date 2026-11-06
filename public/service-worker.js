@@ -1,13 +1,17 @@
-const CACHE_NAME = 'cyberclip-v36';
+const CACHE_NAME = 'cyberclip-v38';
+const PAGES = ['/index.html', '/install.html'];
+// Only the newest firmware is precached; older versions are cached when they
+// are first installed.
 const APP_SHELL = [
   '/',
   '/index.html',
+  '/install.html',
   '/manifest.json',
   '/icons/icon.svg',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
   '/firmware/manifest.json',
-  '/firmware/cyberclip-lilygo-t-display-s3-2.0.29.bin',
+  '/firmware/cyberclip-lilygo-t-display-s3-2.0.30.bin',
 ];
 
 self.addEventListener('install', (event) => {
@@ -18,13 +22,16 @@ async function precacheApplication() {
   const cache = await caches.open(CACHE_NAME);
   await cache.addAll(APP_SHELL);
 
-  const response = await fetch('/index.html', { cache: 'reload' });
-  const html = await response.clone().text();
-  await cache.put('/index.html', response);
-  const assetPaths = [...html.matchAll(/(?:src|href)="([^"]+)"/g)]
-    .map((match) => new URL(match[1], self.location.origin))
-    .filter((url) => url.origin === self.location.origin)
-    .map((url) => `${url.pathname}${url.search}`);
+  const assetPaths = [];
+  for (const page of PAGES) {
+    const response = await fetch(page, { cache: 'reload' });
+    const html = await response.clone().text();
+    await cache.put(page, response);
+    assetPaths.push(...[...html.matchAll(/(?:src|href)="([^"]+)"/g)]
+      .map((match) => new URL(match[1], self.location.origin))
+      .filter((url) => url.origin === self.location.origin)
+      .map((url) => `${url.pathname}${url.search}`));
+  }
   await cache.addAll([...new Set(assetPaths)]);
 }
 

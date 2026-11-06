@@ -1,13 +1,6 @@
 import './styles.css';
-import {
-  DOWNLOAD_PORT_FILTER,
-  DownloadPortNotAuthorizedError,
-  InstallInterruptedError,
-  ESPRESSIF_USB_VENDOR_ID,
-  USB_JTAG_SERIAL_PRODUCT_ID,
-  flashBundledFirmware,
-  isDownloadPort,
-} from './flasher.js';
+import './site.css';
+import { isDownloadPort } from './downloadPort.js';
 import { decodeGif, iterateGifFrames } from './gifs.js';
 import { encodeSourceForDisplay, prepareImageFile } from './images.js';
 import {
@@ -25,6 +18,7 @@ import {
   WifiState,
 } from './protocol.js';
 import { SerialTransport } from './serial.js';
+import { registerServiceWorker } from './serviceWorker.js';
 import { StoredMediaView, uploadErrorHint } from './storedMedia.js';
 import { WifiTransport } from './wifiTransport.js';
 
@@ -53,13 +47,8 @@ const elements = Object.fromEntries([
   'save-hotspot-button',
   'hotspot-status',
   'disconnect-button',
-  'flash-button',
   'support-message',
   'install-notice',
-  'install-notice-message',
-  'install-notice-actions',
-  'continue-install-button',
-  'cancel-install-button',
   'device-resolution',
   'device-firmware',
   'device-transport',
@@ -172,16 +161,7 @@ function initialize() {
   const lastHost = localStorage.getItem(WIFI_LAST_HOST_KEY);
   if (lastHost) elements['wifi-host-input'].value = lastHost;
 
-  if (import.meta.env.PROD && 'serviceWorker' in navigator && globalThis.isSecureContext) {
-    navigator.serviceWorker.register('/service-worker.js').catch((error) => {
-      log(`Offline support could not start: ${error.message}`, 'error');
-    });
-  } else if ('serviceWorker' in navigator) {
-    void navigator.serviceWorker.getRegistrations()
-      .then((registrations) => Promise.all(
-        registrations.map((registration) => registration.unregister()),
-      ));
-  }
+  registerServiceWorker(log);
 }
 
 function bindEvents() {
@@ -191,10 +171,9 @@ function bindEvents() {
   elements['forget-wifi-button'].addEventListener('click', forgetWifi);
   elements['save-hotspot-button'].addEventListener('click', saveHotspot);
   elements['disconnect-button'].addEventListener('click', () => activeTransport.disconnect());
-  elements['flash-button'].addEventListener('click', () => installFirmware());
   if (webSerialAvailable) {
     // A board left in download mode (e.g. by an install that was stopped)
-    // shows up as the USB-Serial/JTAG unit; point the user at finishing it.
+    // shows up as the USB-Serial/JTAG unit; point the user at the install page.
     navigator.serial.addEventListener('connect', () => { void checkForWaitingBoard(); });
     navigator.serial.addEventListener('disconnect', () => { void checkForWaitingBoard(); });
   }
@@ -233,151 +212,12 @@ function bindEvents() {
   });
 }
 
-let awaitingDownloadPort = false;
-let askingForDownloadPort = false;
-
-function showInstallNotice(message, { actions = false } = {}) {
-  elements['install-notice-message'].textContent = message;
-  elements['install-notice-actions'].hidden = !actions;
-  elements['install-notice'].hidden = false;
-}
-
-function hideInstallNotice() {
-  elements['install-notice'].hidden = true;
-  elements['install-notice-actions'].hidden = true;
-}
-
-// Shows a notice while a board sits in download mode outside an install, so
-// a stopped install can always be finished from here (no BOOT/RST needed).
+// Points at the install page while a board sits in download mode, so a
+// stopped install can always be finished (no BOOT/RST needed).
 async function checkForWaitingBoard() {
-  if (!webSerialAvailable || state === 'flashing' || askingForDownloadPort) return;
+  if (!webSerialAvailable) return;
   const ports = await navigator.serial.getPorts().catch(() => []);
-  if (ports.some(isDownloadPort)) {
-    awaitingDownloadPort = true;
-    showInstallNotice(
-      'Your board is waiting in update mode. Select Install firmware to finish installing; your WiFi settings are kept.',
-    );
-  } else if (!awaitingDownloadPort) {
-    hideInstallNotice();
-  }
-}
-
-// The browser only opens the port picker right after a click, and the click
-// on Install firmware has been used up by the time the board restarts into
-// download mode. This asks for a fresh click instead of failing.
-function askForDownloadPort({ signal }) {
-  return new Promise((resolve, reject) => {
-    askingForDownloadPort = true;
-    const finish = () => {
-      askingForDownloadPort = false;
-      elements['continue-install-button'].onclick = null;
-      elements['cancel-install-button'].onclick = null;
-      hideInstallNotice();
-    };
-    showInstallNotice(
-      'The board restarted into update mode. Select Continue installation, then choose "USB JTAG/serial debug unit".',
-      { actions: true },
-    );
-    elements['continue-install-button'].onclick = async () => {
-      try {
-        const picked = await navigator.serial.requestPort({ filters: [DOWNLOAD_PORT_FILTER] });
-        if (isDownloadPort(picked)) {
-          finish();
-          resolve(picked);
-        }
-      } catch {
-        // Picker closed without a choice; keep waiting for another click.
-      }
-    };
-    elements['cancel-install-button'].onclick = () => {
-      finish();
-      reject(new DOMException('Installation cancelled', 'AbortError'));
-    };
-    signal.addEventListener('abort', () => {
-      if (askingForDownloadPort) finish();
-      resolve(null);
-    }, { once: true });
-  });
-}
-
-async function chooseFlashPort() {
-  const authorized = await navigator.serial.getPorts();
-  const downloadPort = authorized.find(isDownloadPort);
-  if (downloadPort) return downloadPort;
-  return navigator.serial.requestPort(
-    awaitingDownloadPort ? { filters: [DOWNLOAD_PORT_FILTER] } : undefined,
-  );
-}
-
-async function installFirmware({ port: chosenPort } = {}) {
-  if (!globalThis.confirm(
-    'Install the bundled Cyberclip firmware? Your WiFi settings and saved media are kept. Keep the USB cable connected until installation finishes.',
-  )) {
-    return;
-  }
-
-  let port = chosenPort ?? serialTransport.port;
-  try {
-    if (!port) port = await chooseFlashPort();
-    if (activeTransport.connected) await activeTransport.disconnect();
-    hideInstallNotice();
-    setState('flashing');
-    setProgress(0, 'Preparing firmware');
-    const manifest = await flashBundledFirmware({
-      port,
-      requestDownloadPort: askForDownloadPort,
-      onProgress(progress) {
-        setProgress(progress, 'Installing firmware');
-      },
-      onStatus(message) {
-        setProgress(elements['transfer-progress'].value, message);
-      },
-    });
-    const target = manifest.board ?? manifest.chip;
-    awaitingDownloadPort = false;
-    log(`Installed Cyberclip firmware ${manifest.version}${target ? ` for ${target}` : ''}`);
-    setProgress(100, 'Firmware installed');
-    activeTransport = serialTransport;
-    // The native USB port re-enumerates as a new "Pixie Pixel Gear" device.
-    await reconnectNativeUsb();
-  } catch (error) {
-    const leftInDownloadMode = error instanceof DownloadPortNotAuthorizedError
-      || error instanceof InstallInterruptedError;
-    awaitingDownloadPort = leftInDownloadMode;
-    const message = error.name === 'NotFoundError'
-      ? 'No serial device was selected'
-      : error.message;
-    log(`Firmware installation failed: ${message}`, 'error');
-    setProgress(0, 'Firmware installation failed');
-    setState('disconnected');
-    if (leftInDownloadMode) {
-      showInstallNotice(
-        'The board is waiting in update mode. Select Install firmware to finish installing; your WiFi settings are kept.',
-      );
-    }
-  }
-}
-
-async function reconnectNativeUsb() {
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    await abortableDelay(1000);
-    const ports = (await navigator.serial.getPorts()).filter((candidate) => {
-      const info = candidate.getInfo?.() ?? {};
-      return info.usbVendorId === ESPRESSIF_USB_VENDOR_ID
-        && info.usbProductId !== USB_JTAG_SERIAL_PRODUCT_ID;
-    });
-    for (const candidate of ports) {
-      try {
-        await serialTransport.connect({ port: candidate });
-        return;
-      } catch {
-        // Try the next port or wait for the board to finish booting.
-      }
-    }
-  }
-  log('Firmware installed. Select Connect and choose "Pixie Pixel Gear" to finish.');
-  setState('disconnected');
-  void checkForWaitingBoard();
+  elements['install-notice'].hidden = !ports.some(isDownloadPort);
 }
 
 async function connectUsb() {
@@ -398,8 +238,9 @@ async function connectUsb() {
     if (appPorts.length === 0) {
       const port = await navigator.serial.requestPort();
       if (isDownloadPort(port)) {
-        log('The board is waiting in update mode; installing firmware finishes it.');
-        await installFirmware({ port });
+        log('The board is waiting in update mode. Open Install firmware to finish installing.', 'error');
+        elements['install-notice'].hidden = false;
+        setState('disconnected');
         return;
       }
       await serialTransport.connect({ port });
@@ -834,7 +675,7 @@ function setState(nextState) {
   state = nextState;
   const connected = activeTransport.connected;
   const ready = nextState === 'ready';
-  const busy = ['processing', 'transferring', 'playing', 'cancelling', 'flashing'].includes(nextState);
+  const busy = ['processing', 'transferring', 'playing', 'cancelling'].includes(nextState);
   const isGif = selectedFile?.type === 'image/gif';
   const connectedViaUsb = serialTransport.connected;
 
@@ -844,7 +685,6 @@ function setState(nextState) {
   elements['forget-wifi-button'].disabled = !ready;
   elements['save-hotspot-button'].disabled = !ready || !connectedViaUsb;
   elements['disconnect-button'].disabled = !connected || busy;
-  elements['flash-button'].disabled = busy || !webSerialAvailable;
   elements['display-button'].disabled = !ready || !selectedFile || isGif;
   elements['play-button'].disabled = !ready || !decodedGif;
   elements['stop-button'].disabled = !busy;
@@ -1000,7 +840,6 @@ function stateLabel(value) {
     transferring: 'Transferring',
     playing: 'Playing GIF',
     cancelling: 'Stopping',
-    flashing: 'Installing firmware',
     disconnecting: 'Disconnecting',
   }[value] ?? value;
 }

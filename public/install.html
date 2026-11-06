@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#111827">
+    <meta
+      name="description"
+      content="Install Cyberclip firmware on a LilyGO T-Display-S3 from Chrome or Edge."
+    >
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+    <title>Install Cyberclip Firmware</title>
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">ESP32 display studio</p>
+        <h1>Cyberclip</h1>
+      </div>
+      <nav class="page-nav" aria-label="Pages">
+        <a href="/">Upload media</a>
+        <a href="/install.html" aria-current="page">Install firmware</a>
+      </nav>
+    </header>
+
+    <main class="layout">
+      <section class="panel firmware-panel" aria-labelledby="firmware-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Firmware</p>
+            <h2 id="firmware-heading">Install on LilyGO T-Display-S3</h2>
+          </div>
+        </div>
+
+        <div id="support-message" class="notice notice-warning" hidden></div>
+        <div id="install-notice" class="notice notice-warning install-notice" role="status" hidden>
+          <p id="install-notice-message"></p>
+          <div id="install-notice-actions" class="button-row" hidden>
+            <button id="continue-install-button" class="button button-primary">Continue installation</button>
+            <button id="cancel-install-button" class="button button-secondary">Cancel</button>
+          </div>
+        </div>
+
+        <p class="device-help">
+          Choose a version and install it directly from Chrome or Edge. Your WiFi settings and saved media are kept. Keep the USB cable connected until the board restarts.
+        </p>
+
+        <fieldset class="version-picker">
+          <legend>Version</legend>
+          <p id="versions-status" class="device-help" aria-live="polite">Loading versions…</p>
+          <ul id="version-list" class="version-list"></ul>
+        </fieldset>
+
+        <div class="button-row install-actions">
+          <button id="flash-button" class="button button-primary" disabled>Install firmware</button>
+        </div>
+
+        <div class="progress-block">
+          <div class="progress-label">
+            <span id="progress-label">Ready</span>
+            <span id="progress-value">0%</span>
+          </div>
+          <progress id="install-progress" value="0" max="100"></progress>
+        </div>
+      </section>
+
+      <section class="panel activity-panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Diagnostics</p>
+            <h2>Activity</h2>
+          </div>
+          <button id="clear-log-button" class="button button-quiet">Clear log</button>
+        </div>
+        <div id="activity-log" class="activity-log" aria-live="polite"></div>
+      </section>
+    </main>
+
+    <template id="log-template">
+      <div class="log-entry">
+        <time></time>
+        <span></span>
+      </div>
+    </template>
+
+    <template id="version-template">
+      <li>
+        <label class="version-option">
+          <input type="radio" name="firmware-version">
+          <span class="version-name"></span>
+          <span class="pill version-latest" hidden>Latest</span>
+          <span class="version-size"></span>
+        </label>
+      </li>
+    </template>
+
+    <script type="module" src="/src/installApp.js"></script>
+  </body>
+</html>

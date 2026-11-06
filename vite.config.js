@@ -42,6 +42,12 @@ export default defineConfig({
   build: {
     outDir: '../dist',
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL('./public/index.html', import.meta.url)),
+        install: fileURLToPath(new URL('./public/install.html', import.meta.url)),
+      },
+    },
   },
   test: {
     root: repositoryRoot,

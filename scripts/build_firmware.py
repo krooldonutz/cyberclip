@@ -203,12 +203,21 @@ def build_release(version, rebuild=False):
             f'Version {version} must be newer than the current published '
             f'version {manifest["version"]}.')
 
-    old_web_paths = [manifest['path']] if 'path' in manifest else []
-    old_web_paths += [build['path'] for build in manifest.get('builds', [])]
-    old_web_paths = list(dict.fromkeys(old_web_paths))
-    for old_web_path in old_web_paths:
-        if not re.fullmatch(r'/firmware/[^/]+\.bin', old_web_path):
-            raise ReleaseError(f'Manifest firmware path is invalid: {old_web_path}')
+    # Every earlier version stays installable from the web installer's version
+    # picker, so its images are kept. Rebuilding a version replaces its entry.
+    earlier_versions = manifest.get('versions') or [
+        {'version': manifest['version'], 'builds': manifest.get('builds', [])}]
+    earlier_versions = [entry for entry in earlier_versions
+                        if entry['version'] != version]
+    for entry in earlier_versions:
+        parse_version(entry['version'])
+        for build in entry['builds']:
+            if not re.fullmatch(r'/firmware/[^/]+\.bin', build['path']):
+                raise ReleaseError(f'Manifest firmware path is invalid: {build["path"]}')
+            if not (REPOSITORY_ROOT / 'public' / build['path'].lstrip('/')).is_file():
+                raise ReleaseError(
+                    f'Firmware {entry["version"]} is listed in the manifest but '
+                    f'its image is missing: {build["path"]}')
 
     targets = [dict(target) for target in FIRMWARE_TARGETS]
     for target in targets:
@@ -291,17 +300,24 @@ def build_release(version, rebuild=False):
             assert_embedded_file(temporary_path, application_path, 0x10000)
             target['size'] = temporary_path.stat().st_size
 
+        new_builds = [{
+            'chip': target['chip'],
+            'board': target['board'],
+            'path': target['web_path'],
+            'address': 0,
+            'size': target['size'],
+            'flashMode': target['flash_mode'],
+            'flashFreq': target['flash_freq'],
+        } for target in targets]
+        all_versions = sorted(
+            [{'version': version, 'builds': new_builds}] + earlier_versions,
+            key=lambda entry: parse_version(entry['version']), reverse=True)
+        # The top-level version and builds are the newest release, for web
+        # app builds that predate the version list and for the workflows.
         updated_manifest = json.dumps({
             'version': version,
-            'builds': [{
-                'chip': target['chip'],
-                'board': target['board'],
-                'path': target['web_path'],
-                'address': 0,
-                'size': target['size'],
-                'flashMode': target['flash_mode'],
-                'flashFreq': target['flash_freq'],
-            } for target in targets],
+            'builds': new_builds,
+            'versions': all_versions,
         }, indent=2) + '\n'
 
         cache_match = re.search(r"const CACHE_NAME = 'cyberclip-v(\d+)';",
@@ -327,12 +343,6 @@ def build_release(version, rebuild=False):
             target['temporary_path'].replace(target['binary_path'])
         write_text(MANIFEST_PATH, updated_manifest)
         write_text(SERVICE_WORKER_PATH, updated_service_worker)
-
-        new_binary_paths = {target['binary_path'] for target in targets}
-        for old_web_path in old_web_paths:
-            old_binary_path = REPOSITORY_ROOT / 'public' / old_web_path.lstrip('/')
-            if old_binary_path not in new_binary_paths and old_binary_path.is_file():
-                old_binary_path.unlink()
 
         release_completed = True
         for target in targets:

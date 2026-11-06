@@ -1,4 +1,11 @@
 import { ESPLoader, Transport } from 'esptool-js';
+import {
+  ESPRESSIF_USB_VENDOR_ID,
+  USB_JTAG_SERIAL_PRODUCT_ID,
+  isDownloadPort,
+} from './downloadPort.js';
+
+export { ESPRESSIF_USB_VENDOR_ID, USB_JTAG_SERIAL_PRODUCT_ID, isDownloadPort };
 
 export const FIRMWARE_MANIFEST_URL = '/firmware/manifest.json';
 
@@ -6,7 +13,6 @@ export const FIRMWARE_MANIFEST_URL = '/firmware/manifest.json';
 // needs a longer reset pulse than a USB-UART bridge would.
 const RESET_SEQUENCE = 'D0|R1|W200|R0|W500';
 
-export const ESPRESSIF_USB_VENDOR_ID = 0x303a;
 export const ESP32S3_RTC_CNTL_OPTION1_REG = 0x6000812c;
 export const ESP32S3_RTC_CNTL_FORCE_DOWNLOAD_BOOT = 0x1;
 // RTC watchdog registers, used to restart the chip without the RST button or
@@ -16,7 +22,6 @@ export const ESP32S3_RTC_CNTL_WDTCONFIG0_REG = 0x60008098;
 export const ESP32S3_RTC_CNTL_WDTCONFIG1_REG = 0x6000809c;
 export const ESP32S3_RTC_CNTL_WDTWPROTECT_REG = 0x600080b0;
 export const ESP32S3_RTC_CNTL_WDT_WKEY = 0x50d83aa1;
-export const USB_JTAG_SERIAL_PRODUCT_ID = 0x1001;
 export const DOWNLOAD_PORT_FILTER = Object.freeze({
   usbVendorId: ESPRESSIF_USB_VENDOR_ID,
   usbProductId: USB_JTAG_SERIAL_PRODUCT_ID,
@@ -41,12 +46,6 @@ const PARTITION_SUBTYPE_NVS = 0x02;
 const PARTITION_SUBTYPE_NVS_KEYS = 0x04;
 
 const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
-
-export function isDownloadPort(port) {
-  const info = port?.getInfo?.() ?? {};
-  return info.usbVendorId === ESPRESSIF_USB_VENDOR_ID
-    && info.usbProductId === USB_JTAG_SERIAL_PRODUCT_ID;
-}
 
 export class DownloadPortNotAuthorizedError extends Error {
   constructor() {
@@ -235,8 +234,16 @@ export async function restartIntoFirmware(loader, chipName) {
   }
 }
 
+// Loads the published firmware versions, newest first.
+export async function loadFirmwareVersions({ fetchImpl = globalThis.fetch } = {}) {
+  if (!fetchImpl) throw new Error('Firmware download is unavailable');
+  return firmwareVersions(await fetchJson(fetchImpl, FIRMWARE_MANIFEST_URL));
+}
+
+// Installs *version* (the newest published one when it is left out).
 export async function flashBundledFirmware({
   port,
+  version,
   serial = globalThis.navigator?.serial,
   fetchImpl = globalThis.fetch,
   onProgress = () => {},
@@ -252,8 +259,13 @@ export async function flashBundledFirmware({
   // Download everything before the board leaves its firmware, so a network
   // problem cannot leave it stuck in download mode.
   onStatus('Loading bundled firmware');
-  const manifest = await fetchJson(fetchImpl, FIRMWARE_MANIFEST_URL);
-  const builds = firmwareBuilds(manifest);
+  const versions = firmwareVersions(await fetchJson(fetchImpl, FIRMWARE_MANIFEST_URL));
+  const release = version === undefined
+    ? versions[0]
+    : versions.find((candidate) => candidate.version === version);
+  if (!release) throw new Error(`Firmware ${version} is not available`);
+  const manifest = { version: release.version };
+  const { builds } = release;
   const images = new Map();
   for (const build of builds) {
     const firmware = await fetchBytes(fetchImpl, build.path);
@@ -375,7 +387,37 @@ function isValidImage(entry) {
     && entry.size > 0;
 }
 
-// Returns the flashable images listed in the manifest's `builds`.
+const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+
+export function compareVersions(a, b) {
+  const left = a.split('.').map(Number);
+  const right = b.split('.').map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    if (left[index] !== right[index]) return left[index] - right[index];
+  }
+  return 0;
+}
+
+// Returns every published version as { version, builds, latest }, newest
+// first. Manifests without a `versions` list only offer the top-level build.
+export function firmwareVersions(manifest) {
+  const listed = Array.isArray(manifest?.versions) && manifest.versions.length > 0
+    ? manifest.versions
+    : [manifest];
+  const seen = new Set();
+  const versions = listed.map((entry) => {
+    if (!VERSION_PATTERN.test(entry?.version ?? '') || seen.has(entry.version)) {
+      throw new Error('Bundled firmware metadata is invalid');
+    }
+    seen.add(entry.version);
+    return { version: entry.version, builds: firmwareBuilds(entry), latest: false };
+  });
+  versions.sort((a, b) => compareVersions(b.version, a.version));
+  versions[0].latest = true;
+  return versions;
+}
+
+// Returns the flashable images listed in a manifest entry's `builds`.
 export function firmwareBuilds(manifest) {
   if (!manifest || typeof manifest.version !== 'string') {
     throw new Error('Bundled firmware metadata is invalid');
