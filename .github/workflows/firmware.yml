@@ -1,8 +1,9 @@
 name: Firmware
 
 # Builds the firmware for every board on pull requests that change it, and
-# commits the versioned release images back to the pull request branch so
-# merging the pull request publishes them to the web installer.
+# commits the versioned release images back to the pull request branch.
+# Merging the pull request publishes them to the staging web installer (main's
+# Vercel preview); publishing a release puts them on production (release.yml).
 on:
   pull_request:
     types: [opened, synchronize, reopened]
