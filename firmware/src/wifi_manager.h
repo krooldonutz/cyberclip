@@ -36,6 +36,8 @@ class WifiManager {
   void suspend();
   void resume();
   bool suspended() const { return suspended_; }
+  // False means the radio is off, so the board may light-sleep.
+  bool hotspotRunning() const { return hotspotRunning_; }
 
   HotspotStatus hotspotStatus() const;
   // Phones currently joined to the hotspot (0 while it is not running).

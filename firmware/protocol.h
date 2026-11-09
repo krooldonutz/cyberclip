@@ -319,6 +319,67 @@ inline uint32_t loopIdleSleepMs(bool busy, bool playbackRunning,
   return maxSleepMs;
 }
 
+// Light sleep stops the CPU and most clocks between GIF frames and on a static
+// screen. Longest single sleep: a static screen wakes this often to check the
+// power source (buttons wake it at once).
+constexpr uint32_t kLightSleepMaxMs = 5000;
+// Waking takes a few milliseconds, so wake this long before the next frame.
+constexpr uint32_t kLightSleepWakeMarginMs = 4;
+// A shorter sleep costs more to enter and leave than it saves.
+constexpr uint32_t kLightSleepMinMs = 8;
+
+// How long to light-sleep now, or 0 to stay awake. *msUntilUsbProbe* is when
+// the next USB window opens (see usbPullUpWanted).
+inline uint32_t lightSleepMs(bool playbackRunning, int32_t msUntilNextFrame,
+                             uint32_t msUntilUsbProbe) {
+  uint32_t sleepMs = kLightSleepMaxMs;
+  if (playbackRunning) {
+    if (msUntilNextFrame <= static_cast<int32_t>(kLightSleepWakeMarginMs)) {
+      return 0;
+    }
+    const uint32_t untilWake =
+        static_cast<uint32_t>(msUntilNextFrame) - kLightSleepWakeMarginMs;
+    if (untilWake < sleepMs) sleepMs = untilWake;
+  }
+  if (msUntilUsbProbe < sleepMs) sleepMs = msUntilUsbProbe;
+  return sleepMs >= kLightSleepMinMs ? sleepMs : 0;
+}
+
+// The board has no USB power sense and cannot answer a host while asleep. So on
+// battery its USB pull-up is off (a host sees nothing, rather than a device
+// that fails to enumerate) except for a short window now and then. A host
+// that starts sending USB frames in a window keeps USB on and the board awake.
+constexpr uint32_t kUsbBootWindowMs = 10 * 1000;
+constexpr uint32_t kUsbProbeWindowMs = 1500;
+constexpr uint32_t kUsbProbeIntervalMs = 30 * 1000;
+// USB sends a frame every millisecond; this long without one means no host.
+constexpr uint32_t kUsbHostQuietMs = 1000;
+
+inline bool usbPullUpWanted(bool onBattery, bool pullUpOn,
+                            uint32_t msSinceChange, uint32_t windowMs,
+                            uint32_t msSinceHostFrame) {
+  if (!onBattery) return true;
+  if (!pullUpOn) return msSinceChange >= kUsbProbeIntervalMs;
+  return msSinceChange < windowMs || msSinceHostFrame < kUsbHostQuietMs;
+}
+
+inline uint32_t msUntilUsbProbe(uint32_t msSinceClosed) {
+  return msSinceClosed >= kUsbProbeIntervalMs
+             ? 0
+             : kUsbProbeIntervalMs - msSinceClosed;
+}
+
+// Decoded GIF frames kept in PSRAM, so later loops skip the flash read and JPEG
+// decode. Holds as many frames as fit while leaving *reserveBytes* free; 0 when
+// fewer than two would fit, since one frame would save nothing.
+inline uint16_t frameCacheCapacity(uint16_t frameCount, size_t largestFreeBytes,
+                                   size_t frameBytes, size_t reserveBytes) {
+  if (frameBytes == 0 || largestFreeBytes <= reserveBytes) return 0;
+  const size_t fits = (largestFreeBytes - reserveBytes) / frameBytes;
+  if (fits < 2) return 0;
+  return fits < frameCount ? static_cast<uint16_t>(fits) : frameCount;
+}
+
 inline size_t playlistMetadataSize(uint8_t frameCount) {
   return kPlaylistMetadataHeaderSize +
          static_cast<size_t>(frameCount) * sizeof(uint16_t) +
