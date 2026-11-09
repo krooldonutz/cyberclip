@@ -3,6 +3,7 @@
 #include <LittleFS.h>
 #include <LovyanGFX.hpp>
 #include <driver/gpio.h>
+#include <driver/ledc.h>
 #include <driver/rtc_io.h>
 #include <esp_heap_caps.h>
 #include <esp_bt.h>
@@ -10,7 +11,10 @@
 #include <esp32-hal-cpu.h>
 #include <esp_attr.h>
 #include <esp_system.h>
+#include <esp_timer.h>
+#include <esp32-hal-tinyusb.h>
 #include <soc/rtc_cntl_reg.h>
+#include <soc/usb_struct.h>
 
 #include "boot_guard.h"
 
@@ -46,6 +50,7 @@ constexpr bool kInvert = true;
 constexpr bool kRgbOrder = false;
 constexpr uint32_t kBusFrequency = 20000000;
 constexpr uint8_t kBacklightPwmChannel = 7;
+constexpr uint32_t kBacklightPwmHz = 12000;
 constexpr char kDeviceName[] = "CyberClip LilyGO T-Display-S3 ST7789";
 }  // namespace board
 
@@ -92,7 +97,7 @@ class MatrixDisplay : public lgfx::LGFX_Device {
       auto cfg = light_.config();
       cfg.pin_bl = board::kBacklight;
       cfg.invert = false;
-      cfg.freq = 12000;
+      cfg.freq = board::kBacklightPwmHz;
       cfg.pwm_channel = board::kBacklightPwmChannel;
       light_.config(cfg);
       panel_.setLight(&light_);
@@ -129,7 +134,7 @@ constexpr uint32_t kSleepButtonDebounceMs = 30;
 constexpr uint32_t kHotspotButtonHoldMs = 1500;
 constexpr uint8_t kFirmwareMajor = 2;
 constexpr uint8_t kFirmwareMinor = 0;
-constexpr uint8_t kFirmwarePatch = 32;
+constexpr uint8_t kFirmwarePatch = 33;
 using board::kDeviceName;
 // Before the saved media library, the board kept one item: /playlist.meta
 // with frames in /aNNN.jpg or /bNNN.jpg. It is moved into slot 0 on boot.
@@ -519,6 +524,12 @@ struct {
   uint32_t lastActivityAt = 0;
   // Last time something was connected over WiFi (or WiFi came back on).
   uint32_t lastWifiConnectionAt = 0;
+  // Since boot, for the status report: time on battery, time in light sleep,
+  // and how many light sleeps that was.
+  uint32_t onBatteryMs = 0;
+  uint32_t onBatteryTalliedAt = 0;
+  uint64_t lightSleepUs = 0;
+  uint32_t lightSleeps = 0;
 } power;
 
 void setFullSpeed(bool fullSpeed) {
@@ -543,6 +554,8 @@ void noteActivity() {
 
 void updatePowerMode() {
   const uint32_t now = millis();
+  if (power.onBattery) power.onBatteryMs += now - power.onBatteryTalliedAt;
+  power.onBatteryTalliedAt = now;
   const bool needsFullSpeed =
       transfer.active || batteryOverlay.visible || batteryButton.pressed ||
       (playbackActive() && playback.needsFullSpeed);
@@ -1253,6 +1266,10 @@ void waitForButtonsReleased() {
 
 void enterDeepSleep() {
   waitForButtonsReleased();
+  // Light sleep's wake sources and its always-on backlight clock would keep
+  // drawing current (or wake the board) in deep sleep.
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+  esp_sleep_pd_config(ESP_PD_DOMAIN_RTC8M, ESP_PD_OPTION_AUTO);
   display.setBrightness(0);
   display.sleep();
   Serial.flush();
@@ -1680,6 +1697,102 @@ bool decodeTransfer(bool render) {
                           transfer.height, transfer.rotation, render);
 }
 
+// Decoded frames of the GIF on screen, in PSRAM. Once a frame is here, showing
+// it again takes a memory copy instead of a flash read and JPEG decode, which
+// leaves far more of each frame's time for light sleep.
+constexpr size_t kFrameCacheFrameBytes =
+    kFramebufferBands * kFramebufferBandPixels * sizeof(uint16_t);
+// Left free for uploads, which also buffer in PSRAM.
+constexpr size_t kFrameCacheReserveBytes = 1024 * 1024;
+
+struct {
+  uint8_t *data = nullptr;
+  bool valid = false;  // The fields below describe an item (even if data failed).
+  uint32_t itemId = 0;
+  uint8_t slot = 0;
+  uint8_t rotation = 0;
+  uint16_t capacity = 0;
+  uint16_t filledCount = 0;
+  bool filled[kMaxStoredFrames]{};
+} frameCache;
+
+void frameCacheRelease() {
+  free(frameCache.data);
+  frameCache.data = nullptr;
+  frameCache.valid = false;
+  frameCache.capacity = 0;
+  frameCache.filledCount = 0;
+  memset(frameCache.filled, 0, sizeof(frameCache.filled));
+}
+
+bool frameCacheHolds(const Playlist &playlist) {
+  return frameCache.valid && frameCache.itemId == playlist.itemId &&
+         frameCache.slot == playlist.slot &&
+         frameCache.rotation == playlist.rotation;
+}
+
+void frameCachePrepare(const Playlist &playlist) {
+  if (frameCacheHolds(playlist)) return;
+  frameCacheRelease();
+  frameCache.valid = true;
+  frameCache.itemId = playlist.itemId;
+  frameCache.slot = playlist.slot;
+  frameCache.rotation = playlist.rotation;
+  if (!framebuffer.allocated || playlist.mediaType != MEDIA_GIF ||
+      playlist.frameCount < 2) {
+    return;
+  }
+  const uint16_t capacity = frameCacheCapacity(
+      playlist.frameCount, heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
+      kFrameCacheFrameBytes, kFrameCacheReserveBytes);
+  if (capacity == 0) return;
+  frameCache.data = static_cast<uint8_t *>(
+      heap_caps_malloc(capacity * kFrameCacheFrameBytes, MALLOC_CAP_SPIRAM));
+  if (frameCache.data) frameCache.capacity = capacity;
+}
+
+bool frameCacheHasFrame(const Playlist &playlist, uint16_t frameIndex) {
+  return frameCacheHolds(playlist) && frameIndex < frameCache.capacity &&
+         frameCache.filled[frameIndex];
+}
+
+// Every frame of this GIF is cached, so playing it needs no more decoding.
+bool frameCacheComplete(const Playlist &playlist) {
+  return frameCacheHolds(playlist) &&
+         frameCache.filledCount >= playlist.frameCount;
+}
+
+void frameCacheLoad(const Playlist &playlist, uint16_t frameIndex) {
+  const uint8_t *source =
+      frameCache.data + frameIndex * kFrameCacheFrameBytes;
+  const size_t bandBytes = kFramebufferBandPixels * sizeof(uint16_t);
+  for (uint16_t *band : framebuffer.bands) {
+    memcpy(band, source, bandBytes);
+    source += bandBytes;
+  }
+  framebuffer.holdsPlaylistFrame = false;
+  framebuffer.presented = false;
+  framebuffer.rotation = playlist.rotation;
+  framebuffer.width = (playlist.rotation & 1) ? board::kHeight : board::kWidth;
+  framebuffer.height = (playlist.rotation & 1) ? board::kWidth : board::kHeight;
+}
+
+// Saves what was just decoded into the framebuffer.
+void frameCacheStore(const Playlist &playlist, uint16_t frameIndex) {
+  if (!framebuffer.allocated || !frameCacheHolds(playlist) ||
+      frameIndex >= frameCache.capacity || frameCache.filled[frameIndex]) {
+    return;
+  }
+  uint8_t *target = frameCache.data + frameIndex * kFrameCacheFrameBytes;
+  const size_t bandBytes = kFramebufferBandPixels * sizeof(uint16_t);
+  for (const uint16_t *band : framebuffer.bands) {
+    memcpy(target, band, bandBytes);
+    target += bandBytes;
+  }
+  frameCache.filled[frameIndex] = true;
+  ++frameCache.filledCount;
+}
+
 bool readFileToBuffer(const char *path, uint8_t **data, uint32_t *size) {
   File file = LittleFS.open(path, FILE_READ);
   if (!file) return false;
@@ -1711,6 +1824,12 @@ bool decodePlaylistFrame(const Playlist &playlist, uint16_t frameIndex,
       frameIndex >= playlist.frameCount) {
     return false;
   }
+  frameCachePrepare(playlist);
+  if (frameCacheHasFrame(playlist, frameIndex)) {
+    frameCacheLoad(playlist, frameIndex);
+    if (render) presentFramebuffer();
+    return true;
+  }
   char path[kStoredPathSize];
   framePath(path, sizeof(path), playlist.slot, frameIndex);
   uint8_t *data = nullptr;
@@ -1726,6 +1845,7 @@ bool decodePlaylistFrame(const Playlist &playlist, uint16_t frameIndex,
              : decodeJpeg(data, size, width, height, playlist.rotation,
                           JpegOutput::kFramebuffer);
   free(data);
+  if (decoded) frameCacheStore(playlist, frameIndex);
   return decoded;
 }
 
@@ -2070,6 +2190,12 @@ void advanceStoredPlayback() {
       return;
     }
     playback.nextFrame = 0;
+    // The first loop may have needed full speed to decode in time. With every
+    // frame cached, the reduced clock keeps up easily.
+    if (frameCacheComplete(activePlaylist)) {
+      playback.needsFullSpeed = false;
+      playback.lateFrames = 0;
+    }
   } else {
     playback.nextFrame = frame + 1;
   }
@@ -2101,8 +2227,9 @@ void sendStatus(uint16_t sequence) {
   // STATUS_RESPONSE: transferActive u8, backlight u8, transferId u16,
   // received u32, expected u32, freeHeap u32, then diagnostics read by
   // scripts/device.py: batteryMillivolts u16, onBattery u8, cpuMhz u16,
-  // uptimeMs u32 (all little-endian). Readers ignore bytes they don't know.
-  uint8_t payload[25] = {static_cast<uint8_t>(transfer.active), backlight};
+  // uptimeMs u32, onBatteryMs u32, lightSleepMs u32, lightSleeps u32 (all
+  // little-endian). Readers ignore bytes they don't know.
+  uint8_t payload[37] = {static_cast<uint8_t>(transfer.active), backlight};
   writeLe16(payload + 2, transfer.active ? transfer.id : 0);
   writeLe32(payload + 4, transfer.received);
   writeLe32(payload + 8, transfer.total);
@@ -2111,6 +2238,9 @@ void sendStatus(uint16_t sequence) {
   payload[18] = power.onBattery ? 1 : 0;
   writeLe16(payload + 19, static_cast<uint16_t>(getCpuFrequencyMhz()));
   writeLe32(payload + 21, millis());
+  writeLe32(payload + 25, power.onBatteryMs);
+  writeLe32(payload + 29, static_cast<uint32_t>(power.lightSleepUs / 1000));
+  writeLe32(payload + 33, power.lightSleeps);
   writeFrame(STATUS_RESPONSE, sequence, payload, sizeof(payload));
 }
 
@@ -2557,6 +2687,8 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
         sendNack(sequence, command, NO_MEMORY);
         return;
       }
+      // The upload needs the memory more; playback refills this afterwards.
+      frameCacheRelease();
       stagingPlaylist = Playlist{};
       stagingPlaylist.mediaType = mediaType;
       stagingPlaylist.frameCount = frameCount;
@@ -2834,6 +2966,8 @@ void showSafeModeMessage() {
   markScreenFill(TFT_BLACK);
 }
 
+void configureLightSleep();
+
 void setup() {
   // First, before anything that could be what keeps crashing.
   {
@@ -2889,6 +3023,7 @@ void setup() {
     if (loadActiveMetadata()) startStoredPlayback();
   }
 
+  configureLightSleep();
   wifiManager.begin();
 #if CYBERCLIP_BLE_MEDIA
   bleMedia.begin();
@@ -2896,6 +3031,111 @@ void setup() {
   // Bluetooth is compiled out; hand the controller's reserved RAM back.
   esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
 #endif
+}
+
+// Set once the backlight can keep running through light sleep.
+bool lightSleepAvailable = false;
+
+// See usbPullUpWanted in protocol.h.
+struct {
+  bool pullUpOn = true;
+  uint32_t changedAt = 0;
+  uint32_t windowMs = kUsbBootWindowMs;
+  uint32_t lastHostFrameAt = 0;
+  uint32_t lastFrameNumber = 0;
+} usbGate;
+
+// Frame number of the last USB frame received (the controller's DSTS register).
+uint32_t usbFrameNumber() {
+  return (USB0.dsts >> 8) & 0x3FFF;
+}
+
+bool anyButtonDown() {
+  if (digitalRead(board::kBatteryButton) == LOW || batteryButton.pressed) {
+    return true;
+  }
+  for (size_t i = 0; i < kButtonCount; ++i) {
+    if (digitalRead(kButtons[i]) == LOW || buttonStates[i].pressed) return true;
+  }
+  return false;
+}
+
+void configureLightSleep() {
+#if !CYBERCLIP_BLE_MEDIA
+  // The default PWM clock stops in light sleep and would turn the backlight
+  // off with it. This is the timer and resolution LovyanGFX's Light_PWM set up
+  // for the channel through ledcSetup.
+  ledc_timer_config_t timer = {};
+  timer.speed_mode = LEDC_LOW_SPEED_MODE;
+  timer.timer_num =
+      static_cast<ledc_timer_t>((board::kBacklightPwmChannel / 2) % 4);
+  timer.duty_resolution = LEDC_TIMER_9_BIT;
+  timer.freq_hz = board::kBacklightPwmHz;
+  timer.clk_cfg = LEDC_USE_RTC8M_CLK;
+  if (ledc_timer_config(&timer) != ESP_OK) return;
+  esp_sleep_pd_config(ESP_PD_DOMAIN_RTC8M, ESP_PD_OPTION_ON);
+
+  // The panel keeps its image only if its pins hold their levels.
+  for (int pin : board::kData) gpio_sleep_sel_dis(static_cast<gpio_num_t>(pin));
+  for (int pin : {board::kWr, board::kRd, board::kDc, board::kCs, board::kReset,
+                  board::kBacklight, board::kLcdPower}) {
+    gpio_sleep_sel_dis(static_cast<gpio_num_t>(pin));
+  }
+
+  gpio_wakeup_enable(kSleepButton, GPIO_INTR_LOW_LEVEL);
+  gpio_wakeup_enable(static_cast<gpio_num_t>(board::kBatteryButton),
+                     GPIO_INTR_LOW_LEVEL);
+  esp_sleep_enable_gpio_wakeup();
+  lightSleepAvailable = true;
+#endif
+}
+
+void pollUsbGate() {
+  if (!lightSleepAvailable) return;
+  const uint32_t now = millis();
+  const uint32_t frameNumber = usbFrameNumber();
+  if (frameNumber != usbGate.lastFrameNumber) {
+    usbGate.lastFrameNumber = frameNumber;
+    usbGate.lastHostFrameAt = now;
+  }
+  bool wanted = usbPullUpWanted(power.onBattery, usbGate.pullUpOn,
+                                now - usbGate.changedAt, usbGate.windowMs,
+                                now - usbGate.lastHostFrameAt);
+  uint32_t windowMs = kUsbProbeWindowMs;
+  // A button press may mean someone just plugged in: don't make them wait.
+  if (!usbGate.pullUpOn && anyButtonDown()) {
+    wanted = true;
+    windowMs = kUsbBootWindowMs;
+  }
+  if (wanted == usbGate.pullUpOn) return;
+  if (wanted) tud_connect();
+  else tud_disconnect();
+  usbGate.pullUpOn = wanted;
+  usbGate.changedAt = now;
+  usbGate.windowMs = windowMs;
+}
+
+// Returns whether it slept. Only runs with the clock already reduced, which
+// means on battery with nothing needing speed and no recent protocol bytes.
+bool lightSleepIfPossible(bool busy) {
+  if (!lightSleepAvailable || busy || power.fullSpeed || usbGate.pullUpOn ||
+      transfer.active || wifiManager.hotspotRunning() || itemHint.visible ||
+      hotspotQr.visible() || anyButtonDown()) {
+    return false;
+  }
+  const uint32_t now = millis();
+  const uint32_t sleepMs =
+      lightSleepMs(playbackActive(), static_cast<int32_t>(playback.deadline - now),
+                   msUntilUsbProbe(now - usbGate.changedAt));
+  if (sleepMs == 0) return false;
+  // A push still on its way to the panel would stall halfway.
+  display.waitDisplay();
+  esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(sleepMs) * 1000);
+  const int64_t sleptFrom = esp_timer_get_time();
+  esp_light_sleep_start();
+  power.lightSleepUs += esp_timer_get_time() - sleptFrom;
+  ++power.lightSleeps;
+  return true;
 }
 
 void loop() {
@@ -2941,6 +3181,7 @@ void loop() {
   pollNowPlaying();
   pollHotspotQr();
   updatePowerMode();
+  pollUsbGate();
 
   // Sleeping lets the idle task halt the CPU between passes instead of
   // spinning. Drawing has already finished, so this never splits a frame.
@@ -2950,6 +3191,6 @@ void loop() {
       busy || transfer.active, playbackActive(),
       static_cast<int32_t>(playback.deadline - millis()),
       power.fullSpeed ? kLoopIdleSleepMs : kBatteryIdleSleepMs);
-  if (sleepMs > 0) delay(sleepMs);
-  else yield();
+  if (sleepMs == 0) yield();
+  else if (!lightSleepIfPossible(busy)) delay(sleepMs);
 }

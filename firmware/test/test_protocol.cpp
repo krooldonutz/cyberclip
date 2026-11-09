@@ -492,6 +492,66 @@ void test_boot_guard_clears_on_clean_boot_or_stable_run() {
   TEST_ASSERT_TRUE(bootGuardOnBoot(state, true) == BootAction::kNormal);
 }
 
+void test_light_sleep_duration() {
+  // A static screen sleeps the longest stretch, cut short by a USB window.
+  TEST_ASSERT_EQUAL_UINT32(kLightSleepMaxMs, lightSleepMs(false, 0, 30000));
+  TEST_ASSERT_EQUAL_UINT32(1200, lightSleepMs(false, 0, 1200));
+  TEST_ASSERT_EQUAL_UINT32(0, lightSleepMs(false, 0, kLightSleepMinMs - 1));
+  // A GIF wakes ahead of its next frame.
+  TEST_ASSERT_EQUAL_UINT32(100 - kLightSleepWakeMarginMs,
+                           lightSleepMs(true, 100, 30000));
+  TEST_ASSERT_EQUAL_UINT32(50, lightSleepMs(true, 100, 50));
+  // Too close to the frame, or already late: stay awake.
+  TEST_ASSERT_EQUAL_UINT32(
+      0, lightSleepMs(true, kLightSleepWakeMarginMs + kLightSleepMinMs - 1, 30000));
+  TEST_ASSERT_EQUAL_UINT32(0, lightSleepMs(true, kLightSleepWakeMarginMs, 30000));
+  TEST_ASSERT_EQUAL_UINT32(0, lightSleepMs(true, -5, 30000));
+}
+
+void test_usb_pull_up_windows() {
+  const uint32_t noHost = kUsbHostQuietMs;
+  // Off battery USB is always on.
+  TEST_ASSERT_TRUE(usbPullUpWanted(false, false, 0, kUsbProbeWindowMs, noHost));
+  // A window stays open for its length, then closes when no host has shown up.
+  TEST_ASSERT_TRUE(usbPullUpWanted(true, true, kUsbProbeWindowMs - 1,
+                                   kUsbProbeWindowMs, noHost));
+  TEST_ASSERT_FALSE(usbPullUpWanted(true, true, kUsbProbeWindowMs,
+                                    kUsbProbeWindowMs, noHost));
+  // The first window after boot is longer.
+  TEST_ASSERT_TRUE(usbPullUpWanted(true, true, kUsbBootWindowMs - 1,
+                                   kUsbBootWindowMs, noHost));
+  // A host keeps it open however long ago the window started, until it stops.
+  TEST_ASSERT_TRUE(usbPullUpWanted(true, true, 3600000, kUsbProbeWindowMs,
+                                   kUsbHostQuietMs - 1));
+  TEST_ASSERT_FALSE(usbPullUpWanted(true, true, 3600000, kUsbProbeWindowMs,
+                                    kUsbHostQuietMs));
+  // Closed, it reopens on schedule.
+  TEST_ASSERT_FALSE(usbPullUpWanted(true, false, kUsbProbeIntervalMs - 1,
+                                    kUsbProbeWindowMs, noHost));
+  TEST_ASSERT_TRUE(usbPullUpWanted(true, false, kUsbProbeIntervalMs,
+                                   kUsbProbeWindowMs, noHost));
+
+  TEST_ASSERT_EQUAL_UINT32(kUsbProbeIntervalMs, msUntilUsbProbe(0));
+  TEST_ASSERT_EQUAL_UINT32(1, msUntilUsbProbe(kUsbProbeIntervalMs - 1));
+  TEST_ASSERT_EQUAL_UINT32(0, msUntilUsbProbe(kUsbProbeIntervalMs + 5));
+}
+
+void test_frame_cache_capacity() {
+  const size_t frame = 108800;
+  const size_t reserve = 1024 * 1024;
+  // Everything fits.
+  TEST_ASSERT_EQUAL_UINT16(10, frameCacheCapacity(10, reserve + 20 * frame,
+                                                  frame, reserve));
+  // Only as many as fit, keeping the reserve free.
+  TEST_ASSERT_EQUAL_UINT16(5, frameCacheCapacity(255, reserve + 5 * frame + 1,
+                                                 frame, reserve));
+  // Room for fewer than two frames, or none at all.
+  TEST_ASSERT_EQUAL_UINT16(0, frameCacheCapacity(10, reserve + frame, frame,
+                                                 reserve));
+  TEST_ASSERT_EQUAL_UINT16(0, frameCacheCapacity(10, reserve, frame, reserve));
+  TEST_ASSERT_EQUAL_UINT16(0, frameCacheCapacity(10, 0, frame, reserve));
+}
+
 void runTests() {
   UNITY_BEGIN();
   RUN_TEST(test_boot_guard_escalates_crash_loops);
@@ -513,6 +573,9 @@ void runTests() {
   RUN_TEST(test_hotspot_modes_and_passwords);
   RUN_TEST(test_generated_hotspot_password);
   RUN_TEST(test_power_policy);
+  RUN_TEST(test_light_sleep_duration);
+  RUN_TEST(test_usb_pull_up_windows);
+  RUN_TEST(test_frame_cache_capacity);
   RUN_TEST(test_ams_entity_update_parsing);
   RUN_TEST(test_ams_playback_state);
   RUN_TEST(test_ams_playback_info_and_time);

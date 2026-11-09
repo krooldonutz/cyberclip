@@ -140,6 +140,12 @@ def status(device):
                       cpu_mhz=cpu_mhz, uptime_s=round(uptime_ms / 1000, 1))
     else:
         result['note'] = 'firmware is too old to report battery, CPU clock and uptime'
+    if len(data) >= 37:
+        on_battery_ms, asleep_ms, sleeps = struct.unpack_from('<III', data, 25)
+        result.update(on_battery_s=round(on_battery_ms / 1000, 1),
+                      light_sleep_s=round(asleep_ms / 1000, 1),
+                      light_sleeps=sleeps,
+                      asleep_pct=round(100 * asleep_ms / on_battery_ms, 1) if on_battery_ms else 0)
     return result
 
 

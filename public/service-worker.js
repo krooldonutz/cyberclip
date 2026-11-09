@@ -1,4 +1,4 @@
-const CACHE_NAME = 'cyberclip-v40';
+const CACHE_NAME = 'cyberclip-v41';
 const PAGES = ['/index.html', '/install.html'];
 // Only the newest firmware is precached; older versions are cached when they
 // are first installed.
@@ -11,7 +11,7 @@ const APP_SHELL = [
   '/icons/icon-192.png',
   '/icons/icon-512.png',
   '/firmware/manifest.json',
-  '/firmware/cyberclip-lilygo-t-display-s3-2.0.32.bin',
+  '/firmware/cyberclip-lilygo-t-display-s3-2.0.33.bin',
 ];
 
 self.addEventListener('install', (event) => {
