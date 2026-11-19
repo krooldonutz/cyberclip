@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Mirror part of a PC screen onto the Cyberclip, live (hidden developer tool).
 
+Needs the screen-mirror firmware build (released firmware leaves it out):
+  python scripts/device.py flash --env lilygo_t_display_s3_mirror
+
 Not linked from the web app. Captures a monitor or a screen region, scales it
 to the 320x170 panel, JPEG-encodes it and streams it as MIRROR_FRAME parts
 (see firmware/protocol.h). Nothing is saved on the board. Ctrl+C stops and
@@ -56,11 +59,9 @@ PROTOCOL_VERSION = 2
 BAUD = 921600
 HOTSPOT_HOST = '192.168.4.1'
 
-HELLO, BEGIN_FRAME, FRAME_CHUNK, COMMIT_FRAME = 0x01, 0x10, 0x11, 0x12
-CANCEL_TRANSFER, MIRROR_FRAME, PLAY_STORED = 0x13, 0x14, 0x32
+HELLO, MIRROR_FRAME, PLAY_STORED = 0x01, 0x14, 0x32
 NACK = 0xF1
 UNSUPPORTED_COMMAND, NEEDS_FULL_FRAME = 2, 12
-CODEC_JPEG = 1
 MAX_WIRE_PAYLOAD = 4096
 MIRROR_HEADER = 19
 MIRROR_PART_BYTES = MAX_WIRE_PAYLOAD - MIRROR_HEADER
@@ -270,13 +271,19 @@ class BoardError(Exception):
         self.code = code
 
 
+class NoMirrorFirmware(Exception):
+    def __init__(self):
+        super().__init__(
+            'This firmware has no screen mirror; it is only in the mirror build. Flash it '
+            'with: python scripts/device.py flash --env lilygo_t_display_s3_mirror')
+
+
 class Board:
     def __init__(self, link):
         self.link = link
         self.parser = ReplyParser()
         self.sequence = 0
         self.transfer_id = 0
-        self.mirror_command = True
         data = self.request(HELLO)
         self.width, self.height, self.max_chunk, self.max_frame = \
             struct.unpack_from('<HHHI', data, 0)
@@ -309,34 +316,14 @@ class Board:
         """Shows *jpeg* at *rect* (x, y, width, height) of the frame. Raises
         BoardError(NEEDS_FULL_FRAME) when the board can't patch its screen."""
         self.transfer_id = self.transfer_id % 0xFFFF + 1
-        if self.mirror_command:
-            try:
-                for offset in range(0, len(jpeg), MIRROR_PART_BYTES):
-                    self.request(MIRROR_FRAME, struct.pack(
-                        '<HIIBHHHH', self.transfer_id, offset, len(jpeg), rotation, *rect)
-                        + jpeg[offset:offset + MIRROR_PART_BYTES])
-                return
-            except BoardError as error:
-                if error.code != UNSUPPORTED_COMMAND:
-                    raise
-                print('Older firmware: using the slower frame commands.', file=sys.stderr)
-                self.mirror_command = False
-        if tuple(rect) != (0, 0) + tuple(frame_size):
-            raise BoardError(NEEDS_FULL_FRAME)
-        width, height = frame_size
-        tid = self.transfer_id
-        self.request(BEGIN_FRAME, struct.pack('<HHHBBI', tid, width, height,
-                                              CODEC_JPEG, rotation, len(jpeg)))
         try:
-            for offset in range(0, len(jpeg), self.max_chunk):
-                self.request(FRAME_CHUNK, struct.pack('<HI', tid, offset)
-                             + jpeg[offset:offset + self.max_chunk])
-            self.request(COMMIT_FRAME, struct.pack('<H', tid))
-        except BoardError:
-            try:
-                self.request(CANCEL_TRANSFER, struct.pack('<H', tid))
-            except BoardError:
-                pass
+            for offset in range(0, len(jpeg), MIRROR_PART_BYTES):
+                self.request(MIRROR_FRAME, struct.pack(
+                    '<HIIBHHHH', self.transfer_id, offset, len(jpeg), rotation, *rect)
+                    + jpeg[offset:offset + MIRROR_PART_BYTES])
+        except BoardError as error:
+            if error.code == UNSUPPORTED_COMMAND:
+                raise NoMirrorFirmware() from error
             raise
 
 
@@ -777,6 +764,8 @@ def main():
                 stats_at = now
     except KeyboardInterrupt:
         pass
+    except NoMirrorFirmware as error:
+        print(f'\n{error}', file=sys.stderr)
     except (TimeoutError, ConnectionError, OSError) as error:
         print(f'\nStopped: {error}', file=sys.stderr)
     finally:

@@ -8,7 +8,7 @@ Usage (from the repository root):
   python scripts/device.py [--port COM8] hotspot
   python scripts/device.py [--port COM8] backlight <0-255>
   python scripts/device.py [--port COM8] watch [--interval 10] [--duration 600] [--csv log.csv]
-  python scripts/device.py [--port COM8] flash
+  python scripts/device.py [--port COM8] flash [--env lilygo_t_display_s3_mirror]
 
 Needs pyserial. PlatformIO's own Python has it:
   ~/.platformio/penv/Scripts/python.exe scripts/device.py status
@@ -223,7 +223,7 @@ def wait_for_download_port(timeout=20):
     return None
 
 
-def flash(port):
+def flash(port, environment='lilygo_t_display_s3'):
     """Builds and installs the firmware the way the web installer reaches
     download mode. The firmware runs TinyUSB on the native USB port, which
     esptool's DTR/RTS reset can't handle: the board re-enumerates on another
@@ -249,7 +249,7 @@ def flash(port):
     # with another partition layout boots too. Stored media survives when the
     # layout already matches.
     result = subprocess.call(
-        [str(platformio_tool('pio')), 'run', '-e', 'lilygo_t_display_s3', '-t', 'upload',
+        [str(platformio_tool('pio')), 'run', '-e', environment, '-t', 'upload',
          '--upload-port', download_port], cwd=FIRMWARE_DIRECTORY)
     if result != 0:
         return result
@@ -285,7 +285,10 @@ def main():
     watcher.add_argument('--interval', type=float, default=10)
     watcher.add_argument('--duration', type=float, default=0, help='seconds, 0 = until Ctrl+C')
     watcher.add_argument('--csv', help='also write rows to this CSV file')
-    commands.add_parser('flash', help='build and flash firmware over USB')
+    flasher = commands.add_parser('flash', help='build and flash firmware over USB')
+    flasher.add_argument('--env', default='lilygo_t_display_s3',
+                         help='PlatformIO environment, e.g. lilygo_t_display_s3_mirror '
+                              'for the screen-mirror build')
     args = parser.parse_args()
 
     if args.command == 'ports':
@@ -304,7 +307,7 @@ def main():
             port = wait_for_download_port(timeout=120)
             if not port:
                 sys.exit('Still no board.')
-        return flash(port)
+        return flash(port, args.env)
     port = args.port or find_port()
 
     device = Device(port)

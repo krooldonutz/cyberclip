@@ -16,6 +16,7 @@ $PY scripts/device.py hotspot      # hotspot setting, running, IP, SSID
 $PY scripts/device.py backlight 64 # 0-255
 $PY scripts/device.py watch --interval 10 --duration 300 --csv <scratchpad>/power.csv
 $PY scripts/device.py flash        # build + flash lilygo_t_display_s3 over USB
+$PY scripts/device.py flash --env lilygo_t_display_s3_mirror   # the screen-mirror build
 ```
 
 `--port COMx` overrides auto-detection. Only one program can hold the port: close the web app's connection (or any serial monitor) first, or the script fails to open it.

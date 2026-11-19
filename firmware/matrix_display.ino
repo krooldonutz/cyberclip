@@ -18,6 +18,12 @@
 
 #include "boot_guard.h"
 
+// The PC screen mirror (MIRROR_FRAME, scripts/mirror.py) is only in the
+// lilygo_t_display_s3_mirror build; released firmware leaves it out.
+#ifndef CYBERCLIP_SCREEN_MIRROR
+#define CYBERCLIP_SCREEN_MIRROR 0
+#endif
+
 #include "protocol.h"
 #include "visualizer.h"
 #include "src/ble_media.h"
@@ -118,10 +124,12 @@ constexpr uint32_t kSerialBaud = 921600;
 constexpr uint32_t kCpuFrequencyMhz = 160;
 // Battery-only clock for a static screen (WiFi still needs at least 80 MHz).
 constexpr uint32_t kReducedCpuFrequencyMhz = 80;
+#if CYBERCLIP_SCREEN_MIRROR
 // While the PC screen mirror streams (MIRROR_FRAME), the CPU runs at this
 // clock, until this long after its last frame.
 constexpr uint32_t kMirrorCpuFrequencyMhz = 240;
 constexpr uint32_t kMirrorActiveMs = 1000;
+#endif
 // Time without protocol bytes before the CPU may drop to the reduced clock.
 constexpr uint32_t kFullSpeedHoldMs = 3000;
 constexpr uint32_t kPowerCheckIntervalMs = 5000;
@@ -544,6 +552,7 @@ volatile uint32_t usbRxDroppedBytes = 0;
 uint8_t bootResetReason = 0;
 uint8_t bootCrashCount = 0;
 
+#if CYBERCLIP_SCREEN_MIRROR
 // Set while the framebuffer (and the panel) hold the frame the PC mirror
 // last showed, so a changed rectangle can be decoded on top of it.
 bool mirrorFramebufferCurrent = false;
@@ -565,6 +574,13 @@ void setFullSpeed(bool fullSpeed) {
   setCpuFrequencyMhz(mhz);
   cpuMhz = mhz;
 }
+#else
+void setFullSpeed(bool fullSpeed) {
+  if (power.fullSpeed == fullSpeed) return;
+  setCpuFrequencyMhz(fullSpeed ? kCpuFrequencyMhz : kReducedCpuFrequencyMhz);
+  power.fullSpeed = fullSpeed;
+}
+#endif
 
 // The panel shows *backlight* (the level the app set), halved on battery.
 void applyBacklight() {
@@ -585,7 +601,10 @@ void updatePowerMode() {
   if (power.onBattery) power.onBatteryMs += now - power.onBatteryTalliedAt;
   power.onBatteryTalliedAt = now;
   const bool needsFullSpeed =
-      transfer.active || mirrorStreaming() || batteryOverlay.visible || batteryButton.pressed ||
+#if CYBERCLIP_SCREEN_MIRROR
+      mirrorStreaming() ||
+#endif
+      transfer.active || batteryOverlay.visible || batteryButton.pressed ||
       (playbackActive() && playback.needsFullSpeed);
   // The ADC read takes well under a millisecond, so it runs only when the
   // next GIF frame is far enough away that it cannot delay it. A GIF that
@@ -1220,10 +1239,11 @@ void markScreenLiveFrame() {
   liveFrame.height = transfer.height;
   liveFrame.rotation = transfer.rotation;
   transfer.data = nullptr;
-  // A streamed frame (an unsaved image, or the PC screen mirror) replaces the
-  // saved item on screen; a playing GIF would otherwise draw over it. A button
-  // tap or PLAY_STORED starts it again.
+#if CYBERCLIP_SCREEN_MIRROR
+  // A mirrored frame replaces the saved item on screen; a playing GIF would
+  // otherwise draw over it. A button tap or PLAY_STORED starts it again.
   playback.running = false;
+#endif
   screen = ScreenState{};
   screen.content = ScreenContent::kLiveFrame;
   onScreenChanged();
@@ -1642,6 +1662,7 @@ int jpegDraw(JPEGDRAW *draw) {
                columns * sizeof(uint16_t));
         continue;
       }
+#if CYBERCLIP_SCREEN_MIRROR
       if (framebuffer.rotation & 1) {
         // Landscape: a source row is a native column, walked one native row
         // at a time (down for rotation 1, up for 3) without a division per
@@ -1673,6 +1694,7 @@ int jpegDraw(JPEGDRAW *draw) {
         }
         continue;
       }
+#endif
       for (int column = 0; column < columns; ++column) {
         const int x = draw->x + column;
         // Same mapping as LovyanGFX's rotations (Panel_FrameBufferBase).
@@ -1707,7 +1729,9 @@ bool decodeJpeg(uint8_t *data, uint32_t size, uint16_t width, uint16_t height,
   if (dimensionsOk) {
     jpeg.setPixelType(RGB565_BIG_ENDIAN);
     if (output == JpegOutput::kFramebuffer) {
+#if CYBERCLIP_SCREEN_MIRROR
       mirrorFramebufferCurrent = false;
+#endif
       framebuffer.holdsPlaylistFrame = false;
       framebuffer.presented = false;
       framebuffer.rotation = rotation;
@@ -1756,6 +1780,7 @@ bool decodeJpegBuffer(uint8_t *data, uint32_t size, uint16_t width,
   return true;
 }
 
+#if CYBERCLIP_SCREEN_MIRROR
 bool mirrorCanPatch(uint8_t rotation) {
   return mirrorFramebufferCurrent && framebuffer.allocated &&
          framebuffer.presented && screen.content == ScreenContent::kLiveFrame &&
@@ -1798,6 +1823,7 @@ bool decodeMirrorRect(const uint8_t *data, uint32_t size, uint8_t rotation,
   if (decoded) presentFramebuffer();
   return decoded;
 }
+#endif
 
 bool decodeTransfer(bool render) {
   return decodeJpegBuffer(transfer.data, transfer.total, transfer.width,
@@ -2738,6 +2764,7 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
       return;
     }
 
+#if CYBERCLIP_SCREEN_MIRROR
     case MIRROR_FRAME: {
       if (length <= kMirrorFrameHeaderSize) {
         sendNack(sequence, command, INVALID_PAYLOAD);
@@ -2822,6 +2849,7 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
       releaseTransfer();
       return;
     }
+#endif
 
     case SET_BACKLIGHT:
       if (length != 1) {
@@ -3350,6 +3378,7 @@ void loop() {
     busy = true;
     noteActivity();
   }
+#if CYBERCLIP_SCREEN_MIRROR
   // In blocks: one call per byte costs more than the parsing itself.
   uint8_t serialBytes[256];
   for (int available = Serial.available(); available > 0;
@@ -3358,6 +3387,11 @@ void loop() {
         serialBytes, min<size_t>(static_cast<size_t>(available), sizeof(serialBytes)));
     for (size_t i = 0; i < count; ++i) serialParser.feed(serialBytes[i]);
   }
+#else
+  while (Serial.available() > 0) {
+    serialParser.feed(static_cast<uint8_t>(Serial.read()));
+  }
+#endif
   serialParser.pollTimeout();
 
   if (bootAction == BootAction::kSafeMode) {
@@ -3397,8 +3431,10 @@ void loop() {
   // spinning. Drawing has already finished, so this never splits a frame.
   // On battery with the clock reduced (static screen, nothing arriving), the
   // loop wakes far less often; activity switches back to 1 ms passes.
+#if CYBERCLIP_SCREEN_MIRROR
   // While the mirror streams, the next frame's bytes are due any moment.
   if (mirrorStreaming()) busy = true;
+#endif
   const uint32_t sleepMs = loopIdleSleepMs(
       busy || transfer.active, playbackActive(),
       static_cast<int32_t>(playback.deadline - millis()),
