@@ -28,6 +28,22 @@ void WifiManager::begin() {
   snprintf(hotspotSsid_, sizeof(hotspotSsid_), "CyberClip-%06X", suffix);
   loadFromPreferences();
   ensureHotspotPassword();
+#ifdef CYBERCLIP_TEST_HOTSPOT_PASSWORD
+  // Developer builds only, never set in platformio.ini: a fixed password a
+  // PC can join with for scripts/mirror.py --wifi, given as a bare
+  // alphanumeric token in the build flags. It is not saved, so a normal
+  // build brings back the board's own password.
+#define CYBERCLIP_STRINGIFY2(x) #x
+#define CYBERCLIP_STRINGIFY(x) CYBERCLIP_STRINGIFY2(x)
+  {
+    static constexpr char kTestPassword[] =
+        CYBERCLIP_STRINGIFY(CYBERCLIP_TEST_HOTSPOT_PASSWORD);
+    static_assert(sizeof(kTestPassword) - 1 >= kHotspotMinPasswordLength &&
+                      sizeof(kTestPassword) - 1 <= kHotspotMaxPasswordLength,
+                  "CYBERCLIP_TEST_HOTSPOT_PASSWORD must be 8-63 characters");
+    strlcpy(hotspotPassword_, kTestPassword, sizeof(hotspotPassword_));
+  }
+#endif
   if (hotspotMode_ == HOTSPOT_ON) startHotspot();
 }
 

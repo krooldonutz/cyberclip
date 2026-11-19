@@ -8,7 +8,7 @@ Usage (from the repository root):
   python scripts/device.py [--port COM8] hotspot
   python scripts/device.py [--port COM8] backlight <0-255>
   python scripts/device.py [--port COM8] watch [--interval 10] [--duration 600] [--csv log.csv]
-  python scripts/device.py [--port COM8] flash
+  python scripts/device.py [--port COM8] flash [--env lilygo_t_display_s3_mirror]
 
 Needs pyserial. PlatformIO's own Python has it:
   ~/.platformio/penv/Scripts/python.exe scripts/device.py status
@@ -146,6 +146,13 @@ def status(device):
                       light_sleep_s=round(asleep_ms / 1000, 1),
                       light_sleeps=sleeps,
                       asleep_pct=round(100 * asleep_ms / on_battery_ms, 1) if on_battery_ms else 0)
+    if len(data) >= 41:
+        result['usb_rx_dropped'] = struct.unpack_from('<I', data, 37)[0]
+    if len(data) >= 43:
+        reasons = {1: 'power-on', 3: 'software', 4: 'panic', 5: 'int-watchdog',
+                   6: 'task-watchdog', 7: 'watchdog', 8: 'deep-sleep', 9: 'brownout'}
+        result['reset_reason'] = reasons.get(data[41], data[41])
+        result['crashes_in_a_row'] = data[42]
     return result
 
 
@@ -216,21 +223,19 @@ def wait_for_download_port(timeout=20):
     return None
 
 
-def flash(port):
+def flash(port, environment='lilygo_t_display_s3'):
     """Builds and installs the firmware the way the web installer reaches
     download mode. The firmware runs TinyUSB on the native USB port, which
     esptool's DTR/RTS reset can't handle: the board re-enumerates on another
     port mid-connect. Instead, a 1200-baud open reboots it into ROM download
     mode on the USB-Serial/JTAG port, and esptool flashes that port."""
     current = next((p for p in list_ports.comports() if p.device == port), None)
-    rebooted = False
     if current is None or current.pid != DOWNLOAD_PID:
         print(f'Restarting the board on {port} into download mode', flush=True)
         try:
             serial.Serial(port, 1200).close()
         except serial.SerialException:
             pass  # it may reboot before the open settles
-        rebooted = True
         download_port = wait_for_download_port()
         if not download_port:
             print('The board did not come back in download mode. Unplug it (and any battery), '
@@ -244,17 +249,17 @@ def flash(port):
     # with another partition layout boots too. Stored media survives when the
     # layout already matches.
     result = subprocess.call(
-        [str(platformio_tool('pio')), 'run', '-e', 'lilygo_t_display_s3', '-t', 'upload',
+        [str(platformio_tool('pio')), 'run', '-e', environment, '-t', 'upload',
          '--upload-port', download_port], cwd=FIRMWARE_DIRECTORY)
     if result != 0:
         return result
-    if rebooted:
-        # Clear the forced download boot set by the 1200-baud reboot, then reset.
-        port_now = wait_for_download_port(timeout=5)
-        if port_now:
-            esptool(port_now, '--before', 'no_reset', '--after', 'hard_reset',
-                    'write_mem', hex(RTC_CNTL_OPTION1_REG), '0',
-                    hex(RTC_CNTL_FORCE_DOWNLOAD_BOOT))
+    # Clear the forced download boot (set by the 1200-baud reboot or the
+    # firmware's crash guard), then reset.
+    port_now = wait_for_download_port(timeout=5)
+    if port_now:
+        esptool(port_now, '--before', 'no_reset', '--after', 'hard_reset',
+                'write_mem', hex(RTC_CNTL_OPTION1_REG), '0',
+                hex(RTC_CNTL_FORCE_DOWNLOAD_BOOT))
     print('Flashed. Waiting for the board to boot the new firmware...', flush=True)
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
@@ -280,7 +285,10 @@ def main():
     watcher.add_argument('--interval', type=float, default=10)
     watcher.add_argument('--duration', type=float, default=0, help='seconds, 0 = until Ctrl+C')
     watcher.add_argument('--csv', help='also write rows to this CSV file')
-    commands.add_parser('flash', help='build and flash firmware over USB')
+    flasher = commands.add_parser('flash', help='build and flash firmware over USB')
+    flasher.add_argument('--env', default='lilygo_t_display_s3',
+                         help='PlatformIO environment, e.g. lilygo_t_display_s3_mirror '
+                              'for the screen-mirror build')
     args = parser.parse_args()
 
     if args.command == 'ports':
@@ -299,7 +307,7 @@ def main():
             port = wait_for_download_port(timeout=120)
             if not port:
                 sys.exit('Still no board.')
-        return flash(port)
+        return flash(port, args.env)
     port = args.port or find_port()
 
     device = Device(port)

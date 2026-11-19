@@ -25,6 +25,41 @@ void test_little_endian_helpers() {
   TEST_ASSERT_EQUAL_HEX16(0x1234, readLe16(bytes));
 }
 
+void test_mirror_parts() {
+  using R = MirrorPartResult;
+  // A new frame, then its continuation.
+  TEST_ASSERT(checkMirrorPart(7, 0, 9000, 1, 4085, 131072, false, 0, 0, 0) ==
+              R::kStart);
+  TEST_ASSERT(checkMirrorPart(7, 4085, 9000, 1, 4085, 131072, true, 7, 9000,
+                              4085) == R::kContinue);
+  // Offset 0 always restarts, even mid-frame.
+  TEST_ASSERT(checkMirrorPart(8, 0, 500, 1, 500, 131072, true, 7, 9000,
+                              4085) == R::kStart);
+  // Gaps, another frame's part, or a part with nothing before it.
+  TEST_ASSERT(checkMirrorPart(7, 4000, 9000, 1, 85, 131072, true, 7, 9000,
+                              4085) == R::kBadOffset);
+  TEST_ASSERT(checkMirrorPart(6, 4085, 9000, 1, 85, 131072, true, 7, 9000,
+                              4085) == R::kBadOffset);
+  TEST_ASSERT(checkMirrorPart(7, 4085, 9000, 1, 85, 131072, false, 0, 0, 0) ==
+              R::kBadOffset);
+  // Past the end, too big, empty, or a bad rotation.
+  TEST_ASSERT(checkMirrorPart(7, 8000, 9000, 1, 1001, 131072, true, 7, 9000,
+                              8000) == R::kOutOfRange);
+  TEST_ASSERT(checkMirrorPart(7, 0, 200000, 1, 100, 131072, false, 0, 0, 0) ==
+              R::kOutOfRange);
+  TEST_ASSERT(checkMirrorPart(7, 0, 0, 1, 0, 131072, false, 0, 0, 0) ==
+              R::kOutOfRange);
+  TEST_ASSERT(checkMirrorPart(7, 0, 100, 4, 100, 131072, false, 0, 0, 0) ==
+              R::kOutOfRange);
+  // Rectangles inside a 320x170 frame.
+  TEST_ASSERT_TRUE(mirrorRectFits(0, 0, 320, 170, 320, 170));
+  TEST_ASSERT_TRUE(mirrorRectFits(304, 160, 16, 10, 320, 170));
+  TEST_ASSERT_FALSE(mirrorRectFits(304, 160, 32, 10, 320, 170));
+  TEST_ASSERT_FALSE(mirrorRectFits(0, 160, 16, 16, 320, 170));
+  TEST_ASSERT_FALSE(mirrorRectFits(320, 0, 1, 1, 320, 170));
+  TEST_ASSERT_FALSE(mirrorRectFits(0, 0, 0, 10, 320, 170));
+}
+
 void test_upload_progress_pixels() {
   TEST_ASSERT_EQUAL_UINT16(0, uploadProgressPixels(100, 0, 0, 0, 0));
   TEST_ASSERT_EQUAL_UINT16(0, uploadProgressPixels(100, 4, 0, 0, 1000));
@@ -581,6 +616,7 @@ void runTests() {
   RUN_TEST(test_ams_playback_info_and_time);
   RUN_TEST(test_ams_utf8_storage);
   RUN_TEST(test_visualizer_wave_and_color);
+  RUN_TEST(test_mirror_parts);
   UNITY_END();
 }
 

@@ -94,6 +94,12 @@ The CRC starts at the version byte and ends after the payload. Maximum wire payl
 
 `BEGIN_PLAYLIST` picks a free library slot (`STORAGE_FULL` when all 16 are used). Persistent `BEGIN_FRAME` requests identify frame index and delay; each committed JPEG is written to `/sNNfFFF.jpg` in that slot. `END_PLAYLIST` validates the complete set, writes `/sNN.tmp` and renames it to `/sNN.meta`, which is the moment the item exists; `/active` records the item on screen. `LIST_STORED`, `SELECT_STORED`, `DELETE_STORED` and `READ_STORED_FRAME` list, show, delete and preview items. `PLAY_STORED` resumes the active item and `CLEAR_STORED` removes every item. At boot, the single item kept by older firmware (`/playlist.meta` with `/aNNN.jpg` or `/bNNN.jpg`) is moved into slot 0, and files that belong to no item (an upload cut off by a reset) are removed.
 
+### PC screen mirror
+
+`scripts/mirror.py` is a developer tool, not linked from the web app and only supported by the separate `lilygo_t_display_s3_mirror` firmware build (`CYBERCLIP_SCREEN_MIRROR=1`; released firmware compiles all of it out and NACKs `MIRROR_FRAME`), that mirrors a PC monitor or screen region onto the board live, over USB or the hotspot WebSocket. It captures on its own thread (GDI shrinks the screen straight to 320x170 on Windows) and sends `MIRROR_FRAME` requests: each carries a transfer ID, offset, total size, rotation and the rectangle of the frame it covers, plus up to about 4 KB of JPEG. Usually only the block-aligned rectangle that changed is sent; the firmware decodes it into the framebuffer over the previous frame and pushes the whole framebuffer, and refuses a rectangle with `NEEDS_FULL_FRAME` when the screen no longer holds the mirror's frame. The part that completes a frame is ACKed before it is decoded, so the next frame arrives during the decode, and the CPU runs at 240 MHz while frames keep coming. While the picture moves faster than the link carries sharp frames, the script lowers JPEG quality to hold the frame rate and sends a sharp whole frame once it stands still.
+
+Over USB the script never has more than one request in flight. The Arduino core's USB CDC receive path (64-byte buffer, one queue operation per byte) carries about 120-160 KB/s, and the board crashes and reboots when a second packet arrives before it has answered the first; repeated, that ends in the crash guard's download mode.
+
 ## Failure behavior
 
 - Invalid magic is skipped until the parser resynchronizes.
