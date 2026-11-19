@@ -6,7 +6,7 @@
       "board": "LilyGO T-Display-S3",
       "path": "/firmware/cyberclip-lilygo-t-display-s3-2.0.34.bin",
       "address": 0,
-      "size": 1845360,
+      "size": 1844080,
       "flashMode": "keep",
       "flashFreq": "keep"
     }
@@ -20,7 +20,7 @@
           "board": "LilyGO T-Display-S3",
           "path": "/firmware/cyberclip-lilygo-t-display-s3-2.0.34.bin",
           "address": 0,
-          "size": 1845360,
+          "size": 1844080,
           "flashMode": "keep",
           "flashFreq": "keep"
         }
