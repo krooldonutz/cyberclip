@@ -146,6 +146,13 @@ def status(device):
                       light_sleep_s=round(asleep_ms / 1000, 1),
                       light_sleeps=sleeps,
                       asleep_pct=round(100 * asleep_ms / on_battery_ms, 1) if on_battery_ms else 0)
+    if len(data) >= 41:
+        result['usb_rx_dropped'] = struct.unpack_from('<I', data, 37)[0]
+    if len(data) >= 43:
+        reasons = {1: 'power-on', 3: 'software', 4: 'panic', 5: 'int-watchdog',
+                   6: 'task-watchdog', 7: 'watchdog', 8: 'deep-sleep', 9: 'brownout'}
+        result['reset_reason'] = reasons.get(data[41], data[41])
+        result['crashes_in_a_row'] = data[42]
     return result
 
 
@@ -223,14 +230,12 @@ def flash(port):
     port mid-connect. Instead, a 1200-baud open reboots it into ROM download
     mode on the USB-Serial/JTAG port, and esptool flashes that port."""
     current = next((p for p in list_ports.comports() if p.device == port), None)
-    rebooted = False
     if current is None or current.pid != DOWNLOAD_PID:
         print(f'Restarting the board on {port} into download mode', flush=True)
         try:
             serial.Serial(port, 1200).close()
         except serial.SerialException:
             pass  # it may reboot before the open settles
-        rebooted = True
         download_port = wait_for_download_port()
         if not download_port:
             print('The board did not come back in download mode. Unplug it (and any battery), '
@@ -248,13 +253,13 @@ def flash(port):
          '--upload-port', download_port], cwd=FIRMWARE_DIRECTORY)
     if result != 0:
         return result
-    if rebooted:
-        # Clear the forced download boot set by the 1200-baud reboot, then reset.
-        port_now = wait_for_download_port(timeout=5)
-        if port_now:
-            esptool(port_now, '--before', 'no_reset', '--after', 'hard_reset',
-                    'write_mem', hex(RTC_CNTL_OPTION1_REG), '0',
-                    hex(RTC_CNTL_FORCE_DOWNLOAD_BOOT))
+    # Clear the forced download boot (set by the 1200-baud reboot or the
+    # firmware's crash guard), then reset.
+    port_now = wait_for_download_port(timeout=5)
+    if port_now:
+        esptool(port_now, '--before', 'no_reset', '--after', 'hard_reset',
+                'write_mem', hex(RTC_CNTL_OPTION1_REG), '0',
+                hex(RTC_CNTL_FORCE_DOWNLOAD_BOOT))
     print('Flashed. Waiting for the board to boot the new firmware...', flush=True)
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:

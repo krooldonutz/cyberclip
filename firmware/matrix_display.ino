@@ -118,6 +118,10 @@ constexpr uint32_t kSerialBaud = 921600;
 constexpr uint32_t kCpuFrequencyMhz = 160;
 // Battery-only clock for a static screen (WiFi still needs at least 80 MHz).
 constexpr uint32_t kReducedCpuFrequencyMhz = 80;
+// While the PC screen mirror streams (MIRROR_FRAME), the CPU runs at this
+// clock, until this long after its last frame.
+constexpr uint32_t kMirrorCpuFrequencyMhz = 240;
+constexpr uint32_t kMirrorActiveMs = 1000;
 // Time without protocol bytes before the CPU may drop to the reduced clock.
 constexpr uint32_t kFullSpeedHoldMs = 3000;
 constexpr uint32_t kPowerCheckIntervalMs = 5000;
@@ -532,10 +536,34 @@ struct {
   uint32_t lightSleeps = 0;
 } power;
 
+// Bytes the Arduino USB core dropped because its receive queue was full,
+// since boot (reported in STATUS_RESPONSE).
+volatile uint32_t usbRxDroppedBytes = 0;
+// Why the board last reset (esp_reset_reason_t) and the crash-guard count at
+// that boot, for STATUS_RESPONSE.
+uint8_t bootResetReason = 0;
+uint8_t bootCrashCount = 0;
+
+// Set while the framebuffer (and the panel) hold the frame the PC mirror
+// last showed, so a changed rectangle can be decoded on top of it.
+bool mirrorFramebufferCurrent = false;
+// Last MIRROR_FRAME part, see kMirrorActiveMs.
+bool mirrorSeen = false;
+uint32_t mirrorFrameAt = 0;
+uint32_t cpuMhz = kCpuFrequencyMhz;
+
+bool mirrorStreaming() {
+  return mirrorSeen && millis() - mirrorFrameAt < kMirrorActiveMs;
+}
+
 void setFullSpeed(bool fullSpeed) {
-  if (power.fullSpeed == fullSpeed) return;
-  setCpuFrequencyMhz(fullSpeed ? kCpuFrequencyMhz : kReducedCpuFrequencyMhz);
+  const uint32_t mhz = !fullSpeed          ? kReducedCpuFrequencyMhz
+                       : mirrorStreaming() ? kMirrorCpuFrequencyMhz
+                                           : kCpuFrequencyMhz;
   power.fullSpeed = fullSpeed;
+  if (cpuMhz == mhz) return;
+  setCpuFrequencyMhz(mhz);
+  cpuMhz = mhz;
 }
 
 // The panel shows *backlight* (the level the app set), halved on battery.
@@ -557,7 +585,7 @@ void updatePowerMode() {
   if (power.onBattery) power.onBatteryMs += now - power.onBatteryTalliedAt;
   power.onBatteryTalliedAt = now;
   const bool needsFullSpeed =
-      transfer.active || batteryOverlay.visible || batteryButton.pressed ||
+      transfer.active || mirrorStreaming() || batteryOverlay.visible || batteryButton.pressed ||
       (playbackActive() && playback.needsFullSpeed);
   // The ADC read takes well under a millisecond, so it runs only when the
   // next GIF frame is far enough away that it cannot delay it. A GIF that
@@ -1192,6 +1220,10 @@ void markScreenLiveFrame() {
   liveFrame.height = transfer.height;
   liveFrame.rotation = transfer.rotation;
   transfer.data = nullptr;
+  // A streamed frame (an unsaved image, or the PC screen mirror) replaces the
+  // saved item on screen; a playing GIF would otherwise draw over it. A button
+  // tap or PLAY_STORED starts it again.
+  playback.running = false;
   screen = ScreenState{};
   screen.content = ScreenContent::kLiveFrame;
   onScreenChanged();
@@ -1610,6 +1642,37 @@ int jpegDraw(JPEGDRAW *draw) {
                columns * sizeof(uint16_t));
         continue;
       }
+      if (framebuffer.rotation & 1) {
+        // Landscape: a source row is a native column, walked one native row
+        // at a time (down for rotation 1, up for 3) without a division per
+        // pixel. Same mapping as the general case below.
+        const bool down = framebuffer.rotation == 1;
+        const int nativeX = down ? framebuffer.height - 1 - y : y;
+        int nativeY = down ? draw->x : framebuffer.width - 1 - draw->x;
+        int band = nativeY / kFramebufferBandRows;
+        int rowInBand = nativeY % kFramebufferBandRows;
+        uint16_t *target = framebuffer.bands[band] +
+                           rowInBand * board::kWidth + nativeX;
+        for (int column = 0; column < columns; ++column) {
+          *target = source[column];
+          if (column + 1 == columns) break;
+          if (down) {
+            if (++rowInBand == kFramebufferBandRows) {
+              rowInBand = 0;
+              target = framebuffer.bands[++band] + nativeX;
+            } else {
+              target += board::kWidth;
+            }
+          } else if (rowInBand-- == 0) {
+            rowInBand = kFramebufferBandRows - 1;
+            target = framebuffer.bands[--band] +
+                     rowInBand * board::kWidth + nativeX;
+          } else {
+            target -= board::kWidth;
+          }
+        }
+        continue;
+      }
       for (int column = 0; column < columns; ++column) {
         const int x = draw->x + column;
         // Same mapping as LovyanGFX's rotations (Panel_FrameBufferBase).
@@ -1644,6 +1707,7 @@ bool decodeJpeg(uint8_t *data, uint32_t size, uint16_t width, uint16_t height,
   if (dimensionsOk) {
     jpeg.setPixelType(RGB565_BIG_ENDIAN);
     if (output == JpegOutput::kFramebuffer) {
+      mirrorFramebufferCurrent = false;
       framebuffer.holdsPlaylistFrame = false;
       framebuffer.presented = false;
       framebuffer.rotation = rotation;
@@ -1690,6 +1754,49 @@ bool decodeJpegBuffer(uint8_t *data, uint32_t size, uint16_t width,
   }
   presentFramebuffer();
   return true;
+}
+
+bool mirrorCanPatch(uint8_t rotation) {
+  return mirrorFramebufferCurrent && framebuffer.allocated &&
+         framebuffer.presented && screen.content == ScreenContent::kLiveFrame &&
+         framebuffer.rotation == rotation;
+}
+
+// Decodes a MIRROR_FRAME JPEG into the framebuffer at (x, y) of a frame in
+// *rotation*, and shows the framebuffer if that worked.
+bool decodeMirrorRect(const uint8_t *data, uint32_t size, uint8_t rotation,
+                      uint16_t x, uint16_t y, uint16_t width, uint16_t height) {
+  const uint16_t frameWidth = (rotation & 1) ? board::kHeight : board::kWidth;
+  const uint16_t frameHeight = (rotation & 1) ? board::kWidth : board::kHeight;
+  if (!framebuffer.allocated) {
+    // Straight to the panel: whole frames only.
+    return x == 0 && y == 0 && width == frameWidth && height == frameHeight &&
+           decodeJpegBuffer(const_cast<uint8_t *>(data), size, width, height,
+                            rotation, true);
+  }
+  if (!jpeg.openRAM(const_cast<uint8_t *>(data), static_cast<int>(size),
+                    jpegDraw)) {
+    mirrorFramebufferCurrent = false;
+    return false;
+  }
+  bool decoded = jpeg.getWidth() == width && jpeg.getHeight() == height;
+  if (decoded) {
+    jpeg.setPixelType(RGB565_BIG_ENDIAN);
+    framebuffer.holdsPlaylistFrame = false;
+    framebuffer.presented = false;
+    framebuffer.rotation = rotation;
+    framebuffer.width = frameWidth;
+    framebuffer.height = frameHeight;
+    jpegOutput = JpegOutput::kFramebuffer;
+    // JPEGDEC trims the right and bottom blocks to the image, so nothing
+    // outside the rectangle changes.
+    decoded = jpeg.decode(x, y, 0) != 0;
+    jpegOutput = JpegOutput::kDiscard;
+  }
+  jpeg.close();
+  mirrorFramebufferCurrent = decoded;
+  if (decoded) presentFramebuffer();
+  return decoded;
 }
 
 bool decodeTransfer(bool render) {
@@ -2227,9 +2334,11 @@ void sendStatus(uint16_t sequence) {
   // STATUS_RESPONSE: transferActive u8, backlight u8, transferId u16,
   // received u32, expected u32, freeHeap u32, then diagnostics read by
   // scripts/device.py: batteryMillivolts u16, onBattery u8, cpuMhz u16,
-  // uptimeMs u32, onBatteryMs u32, lightSleepMs u32, lightSleeps u32 (all
-  // little-endian). Readers ignore bytes they don't know.
-  uint8_t payload[37] = {static_cast<uint8_t>(transfer.active), backlight};
+  // uptimeMs u32, onBatteryMs u32, lightSleepMs u32, lightSleeps u32,
+  // usbRxDroppedBytes u32 (all little-endian), resetReason u8
+  // (esp_reset_reason_t), crashesInARow u8. Readers ignore bytes they don't
+  // know.
+  uint8_t payload[43] = {static_cast<uint8_t>(transfer.active), backlight};
   writeLe16(payload + 2, transfer.active ? transfer.id : 0);
   writeLe32(payload + 4, transfer.received);
   writeLe32(payload + 8, transfer.total);
@@ -2241,6 +2350,9 @@ void sendStatus(uint16_t sequence) {
   writeLe32(payload + 25, power.onBatteryMs);
   writeLe32(payload + 29, static_cast<uint32_t>(power.lightSleepUs / 1000));
   writeLe32(payload + 33, power.lightSleeps);
+  writeLe32(payload + 37, usbRxDroppedBytes);
+  payload[41] = bootResetReason;
+  payload[42] = bootCrashCount;
   writeFrame(STATUS_RESPONSE, sequence, payload, sizeof(payload));
 }
 
@@ -2626,6 +2738,91 @@ void handleCommand(uint8_t command, uint16_t sequence, const uint8_t *payload,
       return;
     }
 
+    case MIRROR_FRAME: {
+      if (length <= kMirrorFrameHeaderSize) {
+        sendNack(sequence, command, INVALID_PAYLOAD);
+        return;
+      }
+      if (stagingPlaylist.valid) {
+        sendNack(sequence, command, cyberclip::BUSY);
+        return;
+      }
+      const uint16_t id = readLe16(payload);
+      const uint32_t offset = readLe32(payload + 2);
+      const uint32_t total = readLe32(payload + 6);
+      const uint8_t rotation = payload[10];
+      const uint16_t x = readLe16(payload + 11);
+      const uint16_t y = readLe16(payload + 13);
+      const uint16_t width = readLe16(payload + 15);
+      const uint16_t height = readLe16(payload + 17);
+      const uint32_t dataLength = length - kMirrorFrameHeaderSize;
+      const MirrorPartResult part = checkMirrorPart(
+          id, offset, total, rotation, dataLength, kMaxFrameSize,
+          transfer.active && !transfer.persistent, transfer.id, transfer.total,
+          transfer.received);
+      const uint16_t frameWidth =
+          (rotation & 1) ? board::kHeight : board::kWidth;
+      const uint16_t frameHeight =
+          (rotation & 1) ? board::kWidth : board::kHeight;
+      if (part == MirrorPartResult::kOutOfRange ||
+          !mirrorRectFits(x, y, width, height, frameWidth, frameHeight)) {
+        sendNack(sequence, command, OUT_OF_RANGE);
+        return;
+      }
+      if (part == MirrorPartResult::kBadOffset) {
+        sendNack(sequence, command, SEQUENCE_ERROR);
+        return;
+      }
+      mirrorSeen = true;
+      mirrorFrameAt = millis();
+      setFullSpeed(true);
+      if (part == MirrorPartResult::kStart) {
+        releaseTransfer();
+        const bool whole = x == 0 && y == 0 && width == frameWidth &&
+                           height == frameHeight;
+        if (!whole && !mirrorCanPatch(rotation)) {
+          sendNack(sequence, command, NEEDS_FULL_FRAME);
+          return;
+        }
+        transfer.data =
+            static_cast<uint8_t *>(heap_caps_malloc(total, MALLOC_CAP_8BIT));
+        if (!transfer.data) {
+          releaseTransfer();
+          sendNack(sequence, command, NO_MEMORY);
+          return;
+        }
+        transfer.id = id;
+        transfer.total = total;
+        transfer.rotation = rotation;
+        transfer.width = width;
+        transfer.height = height;
+        transfer.active = true;
+      }
+      memcpy(transfer.data + offset, payload + kMirrorFrameHeaderSize,
+             dataLength);
+      transfer.received = offset + dataLength;
+      // ACK before decoding, so the PC sends the next frame meanwhile. A
+      // frame that fails to decode leaves the last one on screen, and the
+      // next rectangle is refused (NEEDS_FULL_FRAME).
+      sendAck(sequence, command);
+      if (transfer.received < transfer.total) return;
+      const bool whole = x == 0 && y == 0 && width == frameWidth &&
+                         height == frameHeight;
+      if (decodeMirrorRect(transfer.data, transfer.total, rotation, x, y,
+                           width, height)) {
+        if (whole) {
+          // Kept for redraws (after an overlay hides).
+          markScreenLiveFrame();
+          // markScreenLiveFrame -> onScreenChanged may draw overlays on the
+          // panel; the framebuffer still holds the frame.
+        } else {
+          drawOverlays();
+        }
+      }
+      releaseTransfer();
+      return;
+    }
+
     case SET_BACKLIGHT:
       if (length != 1) {
         sendNack(sequence, command, INVALID_PAYLOAD);
@@ -2968,6 +3165,11 @@ void showSafeModeMessage() {
 
 void configureLightSleep();
 
+void onUsbRxOverflow(void *, esp_event_base_t, int32_t, void *data) {
+  usbRxDroppedBytes +=
+      static_cast<arduino_usb_cdc_event_data_t *>(data)->rx_overflow.dropped_bytes;
+}
+
 void setup() {
   // First, before anything that could be what keeps crashing.
   {
@@ -2976,6 +3178,8 @@ void setup() {
                          reason == ESP_RST_INT_WDT ||
                          reason == ESP_RST_TASK_WDT;
     bootAction = bootGuardOnBoot(bootGuard, crashed);
+    bootResetReason = static_cast<uint8_t>(reason);
+    bootCrashCount = static_cast<uint8_t>(bootGuard.crashes);
     if (bootAction == BootAction::kDownloadMode) {
       // Same as the installer's 1200-baud reboot: the ROM stays in download
       // mode, where the web installer can flash the board.
@@ -2986,6 +3190,7 @@ void setup() {
   setCpuFrequencyMhz(kCpuFrequencyMhz);
   Serial.setRxBufferSize(8192);
   Serial.begin(kSerialBaud);
+  Serial.onEvent(ARDUINO_USB_CDC_RX_OVERFLOW_EVENT, onUsbRxOverflow);
   for (gpio_num_t button : kButtons) {
     rtc_gpio_deinit(button);
     pinMode(button, INPUT_PULLUP);
@@ -3145,8 +3350,13 @@ void loop() {
     busy = true;
     noteActivity();
   }
-  while (Serial.available() > 0) {
-    serialParser.feed(static_cast<uint8_t>(Serial.read()));
+  // In blocks: one call per byte costs more than the parsing itself.
+  uint8_t serialBytes[256];
+  for (int available = Serial.available(); available > 0;
+       available = Serial.available()) {
+    const size_t count = Serial.read(
+        serialBytes, min<size_t>(static_cast<size_t>(available), sizeof(serialBytes)));
+    for (size_t i = 0; i < count; ++i) serialParser.feed(serialBytes[i]);
   }
   serialParser.pollTimeout();
 
@@ -3187,6 +3397,8 @@ void loop() {
   // spinning. Drawing has already finished, so this never splits a frame.
   // On battery with the clock reduced (static screen, nothing arriving), the
   // loop wakes far less often; activity switches back to 1 ms passes.
+  // While the mirror streams, the next frame's bytes are due any moment.
+  if (mirrorStreaming()) busy = true;
   const uint32_t sleepMs = loopIdleSleepMs(
       busy || transfer.active, playbackActive(),
       static_cast<int32_t>(playback.deadline - millis()),

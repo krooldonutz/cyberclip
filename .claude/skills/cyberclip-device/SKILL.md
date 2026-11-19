@@ -45,6 +45,9 @@ Flash when the user asked you to test or install a change. Ask first if they onl
 - `status` also reports, since boot: `on_battery_s`, `light_sleep_s`, `light_sleeps` and `asleep_pct` (share of battery time spent in light sleep). They need firmware that sends a 37-byte status and reset on every boot, including a wake from deep sleep. After an unplugged run, plug in and read them to confirm the board really slept; this shows sleep happened, not how much current it saved.
 - For a real battery-life check, the user has to run the board unplugged and note how long it lasts (or plug in afterwards and read `uptime_s` before it sleeps). Offer that as a manual step.
 - The display can't be seen from here. Ask the user to look at the screen when the change is visual.
+- `status` also reports `usb_rx_dropped` (bytes the USB core dropped since boot), `reset_reason` (why the board last reset: `panic` or `task-watchdog` mean a crash) and `crashes_in_a_row` (the crash guard's count at that boot). The reset at the end of `flash` shows up as `task-watchdog` with a count of 1; that is not a crash.
+- Never send the board a second request before it has answered the first (no pipelining). Over USB that crashes it, and after five crashes in a row the crash guard leaves it in ROM download mode (PID 1001), which looks like a hung board. `flash` recovers it from there.
+- `scripts/mirror.py` streams the PC screen to the board (see ARCHITECTURE.md); the user has to look at the display to judge picture quality.
 
 ## Don't
 

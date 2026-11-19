@@ -36,6 +36,18 @@ enum Command : uint8_t {
   FRAME_CHUNK = 0x11,
   COMMIT_FRAME = 0x12,
   CANCEL_TRANSFER = 0x13,
+  // MIRROR_FRAME (scripts/mirror.py, the PC screen mirror): a live frame, or
+  // a changed rectangle of the frame on screen, in as few requests as
+  // possible. transferId u16, offset u32, totalSize u32, rotation u8, x u16,
+  // y u16, width u16, height u16 (the JPEG's place in the frame, which is
+  // landscape when the rotation is odd), then JPEG bytes. Offset 0 starts a
+  // frame (dropping any unfinished one); each later part must continue at
+  // the bytes received so far. The part that completes the frame is ACKed
+  // first and then decoded and shown, so the next frame can arrive during
+  // the decode. A rectangle smaller than the frame is NACKed with
+  // NEEDS_FULL_FRAME (at its first part) unless the screen still shows the
+  // mirror's last frame in that rotation.
+  MIRROR_FRAME = 0x14,
   SET_BACKLIGHT = 0x20,
   CLEAR_DISPLAY = 0x21,
   GET_STATUS = 0x22,
@@ -141,6 +153,8 @@ enum ErrorCode : uint8_t {
   SEQUENCE_ERROR = 10,
   // No free item slot, or the flash ran out while saving an upload.
   STORAGE_FULL = 11,
+  // MIRROR_FRAME: send the whole frame, not a changed rectangle.
+  NEEDS_FULL_FRAME = 12,
 };
 
 inline uint16_t crc16CcittFalseUpdate(uint16_t crc, uint8_t value) {
@@ -182,6 +196,44 @@ inline void writeLe32(uint8_t *p, uint32_t value) {
   p[1] = static_cast<uint8_t>(value >> 8);
   p[2] = static_cast<uint8_t>(value >> 16);
   p[3] = static_cast<uint8_t>(value >> 24);
+}
+
+constexpr size_t kMirrorFrameHeaderSize = 19;
+
+enum class MirrorPartResult : uint8_t {
+  kStart,          // Offset 0: begins a new frame.
+  kContinue,       // Continues the frame being received.
+  kBadOffset,      // Not where the frame being received left off.
+  kOutOfRange,     // Bad size or rotation, or past the end of the frame.
+};
+
+// Whether a MIRROR_FRAME rectangle lies inside a *frameWidth* x
+// *frameHeight* frame.
+inline bool mirrorRectFits(uint16_t x, uint16_t y, uint16_t width,
+                           uint16_t height, uint16_t frameWidth,
+                           uint16_t frameHeight) {
+  return width > 0 && height > 0 && x < frameWidth && y < frameHeight &&
+         width <= frameWidth - x && height <= frameHeight - y;
+}
+
+// Checks a MIRROR_FRAME part against the frame being received (*receiving*
+// with *receivedId*, *receivedTotal* and *received* bytes so far).
+inline MirrorPartResult checkMirrorPart(uint16_t id, uint32_t offset,
+                                        uint32_t total, uint8_t rotation,
+                                        uint32_t dataLength, uint32_t maxFrame,
+                                        bool receiving, uint16_t receivedId,
+                                        uint32_t receivedTotal,
+                                        uint32_t received) {
+  if (rotation > 3 || total == 0 || total > maxFrame || dataLength == 0 ||
+      offset > total || dataLength > total - offset) {
+    return MirrorPartResult::kOutOfRange;
+  }
+  if (offset == 0) return MirrorPartResult::kStart;
+  if (!receiving || id != receivedId || total != receivedTotal ||
+      offset != received) {
+    return MirrorPartResult::kBadOffset;
+  }
+  return MirrorPartResult::kContinue;
 }
 
 inline uint16_t uploadProgressPixels(uint16_t width, uint16_t frameCount,
