@@ -1,5 +1,6 @@
 import './styles.css';
 import { decodeGif, iterateGifFrames } from './gifs.js';
+import { setupLayoutChrome } from './ui.js';
 import { encodeSourceForDisplay, prepareImageFile } from './images.js';
 import {
   Codec,
@@ -94,6 +95,7 @@ function initialize() {
 }
 
 function bindEvents() {
+  setupLayoutChrome();
   elements['retry-button'].addEventListener('click', connect);
   elements['disconnect-button'].hidden = !SHOW_DISCONNECT_BUTTON;
   if (SHOW_DISCONNECT_BUTTON) {

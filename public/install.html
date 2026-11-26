@@ -3,20 +3,24 @@
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#111827">
+    <meta name="theme-color" content="#fbd3e3">
     <meta
       name="description"
       content="Install Cyberclip firmware on a LilyGO T-Display-S3 from Chrome or Edge."
     >
     <link rel="manifest" href="/manifest.json">
     <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
-    <title>Install Cyberclip Firmware</title>
+    <link rel="preload" href="/ui/pixelify-sans-latin.woff2" as="font" type="font/woff2" crossorigin>
+    <title>Pixie Pixel · Install Firmware</title>
   </head>
-  <body>
+  <body class="install-page">
+    <img class="decor decor-rose-left" src="/ui/rose.webp" alt="" aria-hidden="true">
+    <img class="decor decor-rose-right" src="/ui/rose.webp" alt="" aria-hidden="true">
+
     <header class="topbar">
-      <div>
-        <p class="eyebrow">ESP32 display studio</p>
-        <h1>Cyberclip</h1>
+      <div class="brand">
+        <h1><img class="brand-logo" src="/ui/logo.webp" alt="Pixie Pixel" width="620" height="166"></h1>
+        <img class="brand-fairy" src="/ui/fairy.webp" alt="" aria-hidden="true" width="560" height="615">
       </div>
       <nav class="page-nav" aria-label="Pages">
         <a href="/">Upload media</a>
@@ -38,7 +42,7 @@
           <p id="install-notice-message"></p>
           <div id="install-notice-actions" class="button-row" hidden>
             <button id="continue-install-button" class="button button-primary">Continue installation</button>
-            <button id="cancel-install-button" class="button button-secondary">Cancel</button>
+            <button id="cancel-install-button" class="button">Cancel</button>
           </div>
         </div>
 

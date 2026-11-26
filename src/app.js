@@ -1,6 +1,7 @@
 import './styles.css';
 import './site.css';
 import { isDownloadPort } from './downloadPort.js';
+import { setupLayoutChrome } from './ui.js';
 import { decodeGif, iterateGifFrames } from './gifs.js';
 import { encodeSourceForDisplay, prepareImageFile } from './images.js';
 import {
@@ -152,6 +153,7 @@ function initialize() {
 }
 
 function bindEvents() {
+  setupLayoutChrome();
   elements['connect-button'].addEventListener('click', connectUsb);
   elements['hotspot-toggle-button'].addEventListener('click', toggleHotspot);
   elements['disconnect-button'].addEventListener('click', () => serialTransport.disconnect());

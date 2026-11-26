@@ -18,6 +18,10 @@ on:
       - src/protocol.js
       - src/wifiTransport.js
       - src/styles.css
+      - src/ui.js
+      - src/confirmDialog.js
+      - src/storedMedia.js
+      - public/ui/**
       - vite.device.config.js
       - package-lock.json
       - scripts/build_firmware.py
@@ -54,8 +58,8 @@ jobs:
             "+refs/heads/$BASE_REF:refs/remotes/upstream/$BASE_REF"
           inputs=(firmware ':!firmware/generated' public/device.html
             src/deviceApp.js src/gifs.js src/images.js src/protocol.js
-            src/wifiTransport.js src/styles.css vite.device.config.js
-            package-lock.json scripts/build_firmware.py)
+            src/wifiTransport.js src/styles.css src/ui.js public/ui
+            src/confirmDialog.js src/storedMedia.js vite.device.config.js package-lock.json scripts/build_firmware.py)
           fork_point=$(git merge-base "upstream/$BASE_REF" HEAD)
           last_build=$(git log -1 --format=%H --grep='^Build firmware ' \
             "upstream/$BASE_REF..HEAD" -- public/firmware/manifest.json)
