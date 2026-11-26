@@ -3,51 +3,49 @@
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#111827">
+    <meta name="theme-color" content="#fbd3e3">
     <meta name="description" content="Upload images and GIFs directly to this Cyberclip display.">
-    <title>Cyberclip Upload</title>
+    <title>Pixie Pixel Upload</title>
   </head>
   <body class="device-page">
+    <img class="decor decor-rose-left" src="/ui/rose.webp" alt="" aria-hidden="true">
+    <img class="decor decor-rose-right" src="/ui/rose.webp" alt="" aria-hidden="true">
+
     <header class="topbar">
-      <div>
-        <p class="eyebrow">Direct device upload</p>
-        <h1>Cyberclip</h1>
+      <div class="brand">
+        <h1><img class="brand-logo" src="/ui/logo.webp" alt="Pixie Pixel" width="620" height="166"></h1>
+        <img class="brand-fairy" src="/ui/fairy.webp" alt="" aria-hidden="true" width="560" height="615">
       </div>
-      <div class="button-row">
+      <div class="header-actions">
         <span id="connection-pill" class="pill pill-offline">Connecting</span>
-        <button id="retry-button" class="button button-secondary" hidden>Reconnect</button>
+        <button id="retry-button" class="button button-primary" hidden>Reconnect</button>
         <button id="disconnect-button" class="button button-danger" disabled hidden title="Disconnect and turn off the Cyberclip Wi-Fi">Disconnect</button>
       </div>
     </header>
 
     <main class="layout">
       <section class="workspace">
-        <div class="panel preview-panel">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Preview</p>
-              <h2>Your display</h2>
-            </div>
-            <span id="media-badge" class="pill">No media</span>
-          </div>
-          <div id="preview-stage" class="preview-stage">
+        <div class="panel upload-panel" aria-labelledby="upload-heading">
+          <h2 id="upload-heading" class="visually-hidden">Upload</h2>
+          <label id="preview-stage" class="preview-stage" for="media-input">
+            <span id="media-badge" class="pill preview-badge">No media</span>
             <img id="preview-image" alt="Processed display preview" hidden>
-            <div id="preview-empty" class="preview-empty">
-              <span class="preview-icon">CC</span>
-              <p>Choose an image or GIF to begin.</p>
-            </div>
-          </div>
-          <label class="file-picker">
-            <span>Choose image or GIF</span>
-            <small>JPEG, PNG, WebP, or GIF · maximum 20 MB</small>
-            <input id="media-input" type="file" accept="image/jpeg,image/png,image/webp,image/gif">
+            <span id="preview-empty" class="preview-empty">
+              <span class="preview-icon"><img src="/ui/upload-icon.webp" alt="" width="64" height="64"></span>
+              <span class="preview-title">Choose an image or GIF to begin</span>
+              <span class="preview-hint">JPEG, PNG, WebP, or GIF · maximum 20 MB</span>
+            </span>
           </label>
-          <div class="button-row transfer-actions">
-            <button id="display-button" class="button button-primary" disabled>Display image</button>
-            <button id="play-button" class="button button-primary" disabled>Play GIF</button>
-            <button id="stop-button" class="button button-danger" disabled>Stop</button>
-            <button id="clear-button" class="button button-secondary" disabled>Clear screen</button>
-            <button id="remove-stored-button" class="button button-secondary" disabled>Delete all saved media</button>
+          <div class="upload-actions">
+            <label class="file-button">
+              Choose file
+              <input id="media-input" type="file" accept="image/jpeg,image/png,image/webp,image/gif">
+            </label>
+            <button id="remove-stored-button" class="button" disabled>Delete saved</button>
+            <button id="display-button" class="button action-tile button-primary" disabled>Display image</button>
+            <button id="play-button" class="button action-tile button-primary" disabled>Play GIF</button>
+            <button id="stop-button" class="button action-tile button-danger" disabled>Stop upload</button>
+            <button id="clear-button" class="button action-tile" disabled>Clear screen</button>
           </div>
           <div class="progress-block">
             <div class="progress-label">
@@ -58,64 +56,79 @@
           </div>
         </div>
 
-        <aside class="panel settings-panel">
-          <div>
-            <p class="eyebrow">Adjust</p>
-            <h2>Display settings</h2>
+        <aside class="panel settings-panel" aria-labelledby="settings-heading">
+          <h2 id="settings-heading">Display settings</h2>
+          <div class="settings-grid">
+            <label class="pill-control">
+              <span class="visually-hidden">Fit</span>
+              <select id="fit-select" aria-label="Fit">
+                <option value="contain">Fit: Contain</option>
+                <option value="cover">Fit: Cover</option>
+                <option value="stretch">Fit: Stretch</option>
+              </select>
+            </label>
+            <label class="pill-control">
+              <span class="visually-hidden">Rotation</span>
+              <select id="rotation-select" aria-label="Rotation">
+                <option value="0">Portrait</option>
+                <option value="1">Landscape ↻</option>
+                <option value="2">Upside down</option>
+                <option value="3">Landscape ↺</option>
+              </select>
+            </label>
+            <details class="pill-control">
+              <summary>Quality <output id="quality-output">82</output></summary>
+              <div class="pill-popover">
+                <label class="field-label">JPEG quality (%)
+                  <input id="quality-input" type="range" min="35" max="95" value="82">
+                </label>
+              </div>
+            </details>
+            <details class="pill-control">
+              <summary>Backlight <output id="backlight-output">50</output></summary>
+              <div class="pill-popover">
+                <label class="field-label">Backlight (%)
+                  <input id="backlight-input" type="range" min="0" max="100" value="50">
+                </label>
+              </div>
+            </details>
           </div>
-          <label>Fit
-            <select id="fit-select">
-              <option value="contain">Contain</option>
-              <option value="cover">Cover</option>
-              <option value="stretch">Stretch</option>
-            </select>
+          <label class="field-label">Background colour
+            <input id="background-input" type="color" value="#000000">
           </label>
-          <label>Rotation
-            <select id="rotation-select">
-              <option value="0">Portrait</option>
-              <option value="1">Landscape clockwise</option>
-              <option value="2">Portrait inverted</option>
-              <option value="3">Landscape counter-clockwise</option>
-            </select>
-          </label>
-          <label>Background <input id="background-input" type="color" value="#000000"></label>
-          <label>JPEG quality
-            <span class="range-value"><output id="quality-output">82</output>%</span>
-            <input id="quality-input" type="range" min="35" max="95" value="82">
-          </label>
-          <label>Backlight
-            <span class="range-value"><output id="backlight-output">50</output>%</span>
-            <input id="backlight-input" type="range" min="0" max="100" value="50">
-          </label>
-          <div class="divider"></div>
-          <label>GIF delay override
-            <div class="input-suffix">
-              <input id="gif-delay-input" type="number" min="10" max="60000" placeholder="Source timing">
-              <span>ms</span>
+          <details class="more-settings">
+            <summary>GIF options</summary>
+            <div class="settings-stack">
+              <label class="field-label">GIF delay override
+                <span class="input-suffix">
+                  <input id="gif-delay-input" type="number" min="10" max="60000" placeholder="Source timing">
+                  <span>ms</span>
+                </span>
+              </label>
+              <label class="checkbox-label"><input id="loop-input" type="checkbox" checked>Loop animation</label>
+              <label class="checkbox-label"><input id="persist-input" type="checkbox" checked disabled>Keep media on device</label>
             </div>
-          </label>
-          <label class="checkbox-label"><input id="loop-input" type="checkbox" checked>Loop animation</label>
-          <label class="checkbox-label"><input id="persist-input" type="checkbox" checked disabled>Keep media on device</label>
+          </details>
         </aside>
       </section>
 
       <section class="panel library-panel" aria-labelledby="library-heading">
         <div class="section-heading">
-          <div>
-            <p class="eyebrow">On the device</p>
-            <h2 id="library-heading">Saved media</h2>
-          </div>
-          <button id="library-refresh-button" class="button button-quiet" disabled>Refresh</button>
-        </div>
-        <div class="library-usage">
-          <div class="progress-label">
-            <span id="library-usage-label">Not connected</span>
+          <h2 id="library-heading">Saved media</h2>
+          <div class="library-meta">
             <span id="library-count"></span>
+            <span id="library-usage-label">Not connected</span>
+            <button id="library-refresh-button" class="button button-quiet" disabled>Refresh</button>
           </div>
-          <progress id="library-usage" value="0" max="100" aria-labelledby="library-usage-label"></progress>
         </div>
+        <progress id="library-usage" class="library-usage" value="0" max="100" aria-labelledby="library-usage-label"></progress>
         <p id="library-empty" class="device-help library-empty" aria-live="polite"></p>
-        <ul id="library-list" class="library-list"></ul>
+        <div class="library-strip">
+          <ul id="library-list" class="library-list"></ul>
+          <button id="library-next" class="strip-next" type="button" aria-label="Show more saved media" disabled>
+            <img src="/ui/chevron.svg" alt="" width="12" height="7">
+          </button>
+        </div>
       </section>
 
       <details class="panel activity-panel activity-collapsible">

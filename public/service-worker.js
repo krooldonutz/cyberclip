@@ -1,4 +1,4 @@
-const CACHE_NAME = 'cyberclip-v41';
+const CACHE_NAME = 'cyberclip-v42';
 const PAGES = ['/index.html', '/install.html'];
 // Only the newest firmware is precached; older versions are cached when they
 // are first installed.
